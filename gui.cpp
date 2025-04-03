@@ -12,7 +12,6 @@ ID3D11Device *pDevice = nullptr;
 ID3D11DeviceContext *pContext = nullptr;
 ID3D11RenderTargetView *mainRenderTargetView = nullptr;
 static bool init = false;
-static int prev_width = 0, prev_height = 0;
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
                                               WPARAM wParam, LPARAM lParam);
@@ -23,6 +22,40 @@ void CreateRenderTarget(IDXGISwapChain *pSwapchain)
   pSwapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID *)&pBackBuffer);
   pDevice->CreateRenderTargetView(pBackBuffer, NULL, &mainRenderTargetView);
   pBackBuffer->Release();
+}
+
+long CALLBACK DetourResizeBuffers(
+    IDXGISwapChain *pSwapChain,
+    UINT BufferCount,
+    UINT Width,
+    UINT Height,
+    DXGI_FORMAT NewFormat,
+    UINT SwapChainFlags)
+{
+  ImGui_ImplDX11_Shutdown();
+  ImGui_ImplWin32_Shutdown();
+  ImGui::DestroyContext();
+
+  if (mainRenderTargetView)
+  {
+    mainRenderTargetView->Release();
+    mainRenderTargetView = NULL;
+  }
+  if (pContext)
+  {
+    pContext->Release();
+    pContext = NULL;
+  }
+  if (pDevice)
+  {
+    pDevice->Release();
+    pDevice = NULL;
+  }
+  SetWindowLongPtr(window, GWLP_WNDPROC, (LONG_PTR)(oWndProc));
+
+  init = false;
+
+  return pResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
 }
 
 long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
@@ -53,28 +86,6 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
     }
     else
       return pPresent(pSwapchain, syncInterval, flags);
-  }
-  else
-  {
-    DXGI_SWAP_CHAIN_DESC sd;
-    pSwapchain->GetDesc(&sd);
-
-    if (sd.BufferDesc.Width != prev_width ||
-        sd.BufferDesc.Height != prev_height)
-    {
-      prev_width = sd.BufferDesc.Width;
-      prev_height = sd.BufferDesc.Height;
-
-      if (mainRenderTargetView)
-      {
-        mainRenderTargetView->Release();
-        mainRenderTargetView = NULL;
-      }
-      ImGui_ImplDX11_InvalidateDeviceObjects();
-
-      CreateRenderTarget(pSwapchain);
-      ImGui_ImplDX11_CreateDeviceObjects();
-    }
   }
 
   DXGI_SWAP_CHAIN_DESC sd;
@@ -294,21 +305,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
   return CallWindowProc(oWndProc, hWnd, uMsg, wParam, lParam);
 }
 
-bool GetPresentPointer()
+bool GetSwapChainPointers()
 {
-  HWND hWnd;
+  HWND hWnd = nullptr;
   while (!hWnd)
   {
     Sleep(10);
     GetCurrentProcessWindow(&hWnd);
   }
 
-  IDXGISwapChain *swapChain;
-  ID3D11Device *device;
-  DXGI_SWAP_CHAIN_DESC sd;
+  IDXGISwapChain *swapChain = nullptr;
+  ID3D11Device *device = nullptr;
+  DXGI_SWAP_CHAIN_DESC sd = {0};
   const D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_0};
 
-  ZeroMemory(&sd, sizeof(sd));
   sd.BufferCount = 1;
   sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
   sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -317,18 +327,18 @@ bool GetPresentPointer()
   sd.Windowed = TRUE;
   sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-  if (D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
-                                    featureLevels, 1, D3D11_SDK_VERSION, &sd,
-                                    &swapChain, &device, nullptr,
-                                    nullptr) == S_OK)
+  if (SUCCEEDED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+                                              featureLevels, 1, D3D11_SDK_VERSION, &sd, &swapChain, &device, nullptr, nullptr)))
   {
     void **pVtable = *reinterpret_cast<void ***>(swapChain);
+
+    // Get function pointers
+    pPresentTarget = reinterpret_cast<present>(pVtable[8]);
+    pResizeBuffersTarget = reinterpret_cast<resizeBuffers>(pVtable[13]);
+
     swapChain->Release();
     device->Release();
-
-    pPresentTarget = (present)pVtable[8];
     return true;
   }
-
   return false;
 }

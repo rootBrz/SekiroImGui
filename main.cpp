@@ -14,7 +14,6 @@ int WINAPI main()
 
   RefreshIniValues();
   ApplyResPatch();
-
   if (BORDERLESS_ENABLED)
     ApplyBorderlessPatch();
   ApplyIntroPatch();
@@ -23,35 +22,23 @@ int WINAPI main()
   ApplyFovPatch();
 
   HMODULE hUser32 = GetModuleHandleA("user32.dll");
-  MH_STATUS status = MH_Initialize();
+  LPVOID pSetCursorPos = (LPVOID)GetProcAddress(hUser32, "SetCursorPos");
+  LPVOID pGetRawInputData = (LPVOID)GetProcAddress(hUser32, "GetRawInputData");
 
-  while (!GetPresentPointer())
+  while (!GetSwapChainPointers())
   {
     Sleep(10);
-  };
-
-  if (MH_CreateHook(reinterpret_cast<void **>(pPresentTarget),
-                    reinterpret_cast<LPVOID>(&DetourPresent),
-                    reinterpret_cast<void **>(&pPresent)) == MH_OK)
-  {
-    MH_EnableHook(reinterpret_cast<LPVOID>(pPresentTarget));
   }
 
-  LPVOID pSetCursorPos = (LPVOID)GetProcAddress(hUser32, "SetCursorPos");
-  if (pSetCursorPos && MH_CreateHook(pSetCursorPos, (LPVOID)&HookedSetCursorPos,
-                                     reinterpret_cast<LPVOID *>(
-                                         &g_OriginalSetCursorPos)) == MH_OK)
+  if (MH_Initialize() == MH_OK)
   {
-    MH_EnableHook(pSetCursorPos);
-  }
 
-  LPVOID pGetRawInputData = (LPVOID)GetProcAddress(hUser32, "GetRawInputData");
-  if (pGetRawInputData &&
-      MH_CreateHook(pGetRawInputData, (LPVOID)&HookedGetRawInputData,
-                    reinterpret_cast<LPVOID *>(&g_OriginalGetRawInputData)) ==
-          MH_OK)
-  {
-    MH_EnableHook(pGetRawInputData);
+    MH_CreateHook(reinterpret_cast<void **>(pPresentTarget), reinterpret_cast<LPVOID>(&DetourPresent), reinterpret_cast<void **>(&pPresent));
+    MH_CreateHook(reinterpret_cast<void *>(pResizeBuffersTarget), reinterpret_cast<LPVOID>(&DetourResizeBuffers), reinterpret_cast<void **>(&pResizeBuffers));
+    MH_CreateHook(pSetCursorPos, (LPVOID)&HookedSetCursorPos, reinterpret_cast<LPVOID *>(g_OriginalSetCursorPos));
+    MH_CreateHook(pGetRawInputData, (LPVOID)&HookedGetRawInputData, reinterpret_cast<LPVOID *>(&g_OriginalGetRawInputData));
+
+    MH_EnableHook(MH_ALL_HOOKS);
   }
 
   InitKillsDeathsAddresses();

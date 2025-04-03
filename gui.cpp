@@ -1,0 +1,334 @@
+#include "gui.h"
+#include "imgui.h"
+#include "imgui_impl_dx11.h"
+#include "imgui_impl_win32.h"
+#include "offset.h"
+#include "patches.h"
+#include "utils.h"
+#include <windows.h>
+
+HWND window = nullptr;
+ID3D11Device *pDevice = nullptr;
+ID3D11DeviceContext *pContext = nullptr;
+ID3D11RenderTargetView *mainRenderTargetView = nullptr;
+static bool init = false;
+static int prev_width = 0, prev_height = 0;
+
+extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
+                                              WPARAM wParam, LPARAM lParam);
+
+void CreateRenderTarget(IDXGISwapChain *pSwapchain)
+{
+  ID3D11Texture2D *pBackBuffer;
+  pSwapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID *)&pBackBuffer);
+  pDevice->CreateRenderTargetView(pBackBuffer, NULL, &mainRenderTargetView);
+  pBackBuffer->Release();
+}
+
+long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
+                            UINT flags)
+{
+  if (!init)
+  {
+    if (SUCCEEDED(
+            pSwapchain->GetDevice(__uuidof(ID3D11Device), (void **)&pDevice)))
+    {
+      pDevice->GetImmediateContext(&pContext);
+      DXGI_SWAP_CHAIN_DESC sd;
+      pSwapchain->GetDesc(&sd);
+      window = sd.OutputWindow;
+      ID3D11Texture2D *pBackBuffer;
+      pSwapchain->GetBuffer(0, __uuidof(ID3D11Texture2D),
+                            (LPVOID *)&pBackBuffer);
+      pDevice->CreateRenderTargetView(pBackBuffer, NULL, &mainRenderTargetView);
+      pBackBuffer->Release();
+      oWndProc =
+          (WNDPROC)SetWindowLongPtr(window, GWLP_WNDPROC, (LONG_PTR)WndProc);
+      ImGui::CreateContext();
+      ImGuiIO &io = ImGui::GetIO();
+      io.ConfigFlags = ImGuiConfigFlags_NoMouseCursorChange;
+      ImGui_ImplWin32_Init(window);
+      ImGui_ImplDX11_Init(pDevice, pContext);
+      init = true;
+    }
+    else
+      return pPresent(pSwapchain, syncInterval, flags);
+  }
+  else
+  {
+    DXGI_SWAP_CHAIN_DESC sd;
+    pSwapchain->GetDesc(&sd);
+
+    if (sd.BufferDesc.Width != prev_width ||
+        sd.BufferDesc.Height != prev_height)
+    {
+      prev_width = sd.BufferDesc.Width;
+      prev_height = sd.BufferDesc.Height;
+
+      if (mainRenderTargetView)
+      {
+        mainRenderTargetView->Release();
+        mainRenderTargetView = NULL;
+      }
+      ImGui_ImplDX11_InvalidateDeviceObjects();
+
+      CreateRenderTarget(pSwapchain);
+      ImGui_ImplDX11_CreateDeviceObjects();
+    }
+  }
+
+  DXGI_SWAP_CHAIN_DESC sd;
+  pSwapchain->GetDesc(&sd);
+  pSwapchain->GetFullscreenState(&FULLSCREEN_STATE, nullptr);
+  int iTotalDeaths = player_deaths_addr
+                         ? *reinterpret_cast<const int *>(player_deaths_addr)
+                         : 0;
+  int iTotalKills =
+      total_kills_addr ? *reinterpret_cast<const int *>(total_kills_addr) : 0;
+
+  ImGui_ImplDX11_NewFrame();
+  ImGui_ImplWin32_NewFrame();
+  ImGui::NewFrame();
+  ImGuiIO &io = ImGui::GetIO();
+  io.IniFilename = nullptr;
+  ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+  io.MouseDrawCursor = false;
+  ImGui::SetNextWindowPos(
+      ImVec2((sd.BufferDesc.Width * 0.35f), sd.BufferDesc.Height * 0.5f),
+      ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  if (SHOW_IMGUI)
+  {
+    io.MouseDrawCursor = true;
+    ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoResize);
+
+    ImGui::BeginDisabled(FULLSCREEN_STATE);
+    // FPS CONTROLS
+    if (ImGui::Checkbox("Enable FPS Unlock",
+                        reinterpret_cast<bool *>(&FPSUNLOCK_ENABLED)))
+    {
+      SetIniValue("EnableFpsUnlock", FPSUNLOCK_ENABLED);
+      RefreshIniValues();
+      ApplyFramelockPatch();
+    }
+    if (FULLSCREEN_STATE &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+      ImGui::SetTooltip("This option is disabled because the game in "
+                        "fullscreen state, change to windowed!");
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100);
+    if (ImGui::InputInt("##fpslimit", &FPS_LIMIT, 1, 10))
+    {
+      SetIniValue("FpsLimit", FPS_LIMIT);
+      RefreshIniValues();
+      ApplyFramelockPatch();
+    }
+
+    // BORDERLESS
+    if (ImGui::Checkbox("Enable Borderless Windowed",
+                        (bool *)&BORDERLESS_ENABLED))
+    {
+      SetIniValue("EnableBorderlessFullscreen", BORDERLESS_ENABLED);
+      RefreshIniValues();
+      ApplyBorderlessPatch();
+    }
+    if (FULLSCREEN_STATE &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+      ImGui::SetTooltip("This option is disabled because the game in "
+                        "fullscreen state, change to windowed!");
+    }
+    ImGui::EndDisabled();
+
+    // AUTOLOOT
+    if (ImGui::Checkbox("Enable Autoloot", (bool *)&AUTOLOOT_ENABLED))
+    {
+      SetIniValue("EnableAutoloot", AUTOLOOT_ENABLED);
+      RefreshIniValues();
+      ApplyAutolootPatch();
+    }
+
+    // LOGOS/INTRO
+    if (ImGui::Checkbox("Enable Logo Skip", (bool *)&INTROSKIP_ENABLED))
+    {
+      SetIniValue("EnableIntroSkip", INTROSKIP_ENABLED);
+      RefreshIniValues();
+    }
+
+    // FOV
+    if (ImGui::Checkbox("FOV", (bool *)&FOV_ENABLED))
+    {
+      SetIniValue("EnableFOV", FOV_ENABLED);
+      RefreshIniValues();
+      ApplyFovPatch();
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!FOV_ENABLED);
+    if (ImGui::SliderInt("##fovvalue", &FOV_VALUE, -95, 95))
+    {
+      SetIniValue("ValueFOV", FOV_VALUE);
+      RefreshIniValues();
+      ApplyFovPatch();
+    }
+    ImGui::EndDisabled();
+
+    // RESOLUTION
+    if (ImGui::Checkbox("Enable Custom Resolution",
+                        (bool *)&CUSTOM_RES_ENABLED))
+    {
+      SetIniValue("EnableCustomRes", CUSTOM_RES_ENABLED);
+      RefreshIniValues();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip(
+          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
+
+    ImGui::BeginDisabled(!CUSTOM_RES_ENABLED);
+    ImGui::SetNextItemWidth(100);
+    if (ImGui::InputInt("##customreswidth", &CUSTOM_RES_WIDTH))
+    {
+      SetIniValue("CustomResWidth", CUSTOM_RES_WIDTH);
+      RefreshIniValues();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip(
+          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100);
+    if (ImGui::InputInt("##customresheight", &CUSTOM_RES_HEIGHT))
+    {
+      SetIniValue("CustomResHeight", CUSTOM_RES_HEIGHT);
+      RefreshIniValues();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip(
+          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Apply"))
+    {
+      ApplyResPatch();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      ImGui::SetTooltip(
+          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
+
+    ImGui::EndDisabled();
+
+    // PLAYER DEATHS
+    if (ImGui::Checkbox("Show Player Deaths",
+                        (bool *)&SHOW_PLAYER_DEATHSKILLS_ENABLED))
+    {
+      SetIniValue("EnableShowPlayerDeathsKills",
+                  SHOW_PLAYER_DEATHSKILLS_ENABLED);
+      RefreshIniValues();
+    };
+
+    ImGui::Text("Deaths: %d", iTotalDeaths);
+    ImGui::Text("Kills: %d", (iTotalKills - iTotalDeaths));
+
+    ImGui::End();
+  }
+
+  if (SHOW_PLAYER_DEATHSKILLS_ENABLED)
+  {
+    ImDrawList *draw_list = ImGui::GetForegroundDrawList();
+    char textBuffer[128];
+    snprintf(textBuffer, sizeof(textBuffer), "Deaths: %d\nKills: %d",
+             iTotalDeaths, (iTotalKills - iTotalDeaths));
+
+    ImVec2 textSize = ImGui::CalcTextSize(textBuffer);
+    draw_list->AddText(ImVec2(100, 100), IM_COL32(255, 255, 255, 255),
+                       textBuffer);
+  }
+
+  ImGui::EndFrame();
+  ImGui::Render();
+  pContext->OMSetRenderTargets(1, &mainRenderTargetView, NULL);
+  ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+
+  return pPresent(pSwapchain, syncInterval, flags);
+}
+
+BOOL WINAPI HookedSetCursorPos(int X, int Y)
+{
+  if (SHOW_IMGUI)
+  {
+    return TRUE;
+  }
+  return g_OriginalSetCursorPos(X, Y);
+}
+
+UINT WINAPI HookedGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand,
+                                  LPVOID pData, PUINT pcbSize,
+                                  UINT cbSizeHeader)
+{
+  if (SHOW_IMGUI)
+  {
+    if (pcbSize)
+      *pcbSize = 0;
+
+    return 0;
+  }
+  return g_OriginalGetRawInputData(hRawInput, uiCommand, pData, pcbSize,
+                                   cbSizeHeader);
+}
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+  if (uMsg == WM_KEYDOWN && wParam == VK_HOME)
+  {
+    SHOW_IMGUI = !SHOW_IMGUI;
+    ImGuiIO &io = ImGui::GetIO();
+    io.MouseDrawCursor = true;
+    return true;
+  }
+
+  if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam))
+  {
+    return true;
+  }
+
+  return CallWindowProc(oWndProc, hWnd, uMsg, wParam, lParam);
+}
+
+bool GetPresentPointer()
+{
+  HWND hWnd;
+  while (!hWnd)
+  {
+    Sleep(10);
+    GetCurrentProcessWindow(&hWnd);
+  }
+
+  IDXGISwapChain *swapChain;
+  ID3D11Device *device;
+  DXGI_SWAP_CHAIN_DESC sd;
+  const D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_0};
+
+  ZeroMemory(&sd, sizeof(sd));
+  sd.BufferCount = 1;
+  sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+  sd.OutputWindow = hWnd;
+  sd.SampleDesc.Count = 1;
+  sd.Windowed = TRUE;
+  sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+  if (D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, 0,
+                                    featureLevels, 1, D3D11_SDK_VERSION, &sd,
+                                    &swapChain, &device, nullptr,
+                                    nullptr) == S_OK)
+  {
+    void **pVtable = *reinterpret_cast<void ***>(swapChain);
+    swapChain->Release();
+    device->Release();
+
+    pPresentTarget = (present)pVtable[8];
+    return true;
+  }
+
+  return false;
+}

@@ -1,0 +1,20 @@
+{
+  "C_Cpp.default.includePath": ["/usr/x86_64-w64-mingw32/sys-root/mingw/include/"],
+  "cmake.generator": "Unix Makefiles",
+  "cmake.cmakePath": "cmake",
+  "cmake.configureSettings": {
+    "CMAKE_FIND_ROOT_PATH": "/usr/x86_64-w64-mingw32/sys-root/mingw/",
+    "CMAKE_C_COMPILER": "x86_64-w64-mingw32-gcc",
+    "CMAKE_CXX_COMPILER": "x86_64-w64-mingw32-g++",
+    "CMAKE_BUILD_TYPE": "Release",
+    "CMAKE_SYSTEM_NAME": "Windows"
+  },
+  "files.associations": {
+    "*.js": "javascript",
+    "*.md": "markdown",
+    "*.tsx": "typescriptreact",
+    "*.css": "tailwindcss",
+    "string": "cpp",
+    "ios": "cpp"
+  }
+}

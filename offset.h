@@ -10,8 +10,11 @@ constexpr uintptr_t player_deaths_offset = 0x7b3c51;
 constexpr uintptr_t total_kills_offset = 0x7c95e5;
 
 constexpr uintptr_t resolution_pointer_offset = 0x1194d85;
-constexpr uintptr_t resolution_default_offset = 0x3b1d768;
-constexpr uintptr_t resolution_default_720_offset = 0x3b1d748;
+constexpr uintptr_t resolution_default_3840_offset = 0x3b1d788;
+constexpr uintptr_t resolution_default_2560_offset = 0x3b1d778;
+constexpr uintptr_t resolution_default_1920_offset = 0x3b1d768;
+constexpr uintptr_t resolution_default_1280_offset = 0x3b1d748;
+constexpr uintptr_t resolution_default_840_offset = 0x3b1d730;
 constexpr uintptr_t resolution_scaling_fix_offset = 0x12ac68;
 
 constexpr uintptr_t camadjust_pitch_offset = 0x73e056;

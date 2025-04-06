@@ -52,6 +52,6 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_STRIP} $<TARGET_FILE:${PROJECT_NAME}>
     COMMAND ${CMAKE_COMMAND} -E copy
         $<TARGET_FILE:${PROJECT_NAME}>
-        "${SEKIRO_PATH}/dinput8.dll"
+        "${SEKIRO_PATH}/d3dcompiler_43.dll"
     COMMENT "Copying DLL to Sekiro directory"
 )

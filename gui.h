@@ -20,18 +20,15 @@ inline present pPresentTarget;
 inline WNDPROC oWndProc;
 
 bool GetSwapChainPointers();
-typedef long(CALLBACK *resizeBuffers)(IDXGISwapChain *, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+typedef long(CALLBACK *resizeBuffers)(IDXGISwapChain *, UINT, UINT, UINT,
+                                      DXGI_FORMAT, UINT);
 inline resizeBuffers pResizeBuffersTarget;
 inline resizeBuffers pResizeBuffers;
-long CALLBACK DetourResizeBuffers(
-    IDXGISwapChain *pSwapChain,
-    UINT BufferCount,
-    UINT Width,
-    UINT Height,
-    DXGI_FORMAT NewFormat,
-    UINT SwapChainFlags);
+long CALLBACK DetourResizeBuffers(IDXGISwapChain *pSwapChain, UINT BufferCount,
+                                  UINT Width, UINT Height,
+                                  DXGI_FORMAT NewFormat, UINT SwapChainFlags);
 
-long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
+long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
                             UINT flags);
 BOOL WINAPI HookedSetCursorPos(int X, int Y);
 UINT WINAPI HookedGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand,

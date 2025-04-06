@@ -1,17 +1,20 @@
+#define IMGUI_DISABLE_DEFAULT_FONT
+
 #include "gui.h"
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
 #include "offset.h"
 #include "patches.h"
+#include "roboto_regular_data.h"
 #include "utils.h"
-#include <windows.h>
 
 HWND window = nullptr;
 ID3D11Device *pDevice = nullptr;
 ID3D11DeviceContext *pContext = nullptr;
 ID3D11RenderTargetView *mainRenderTargetView = nullptr;
 static bool init = false;
+static ImFont *statsRoboto;
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
                                               WPARAM wParam, LPARAM lParam);
@@ -24,13 +27,9 @@ void CreateRenderTarget(IDXGISwapChain *pSwapchain)
   pBackBuffer->Release();
 }
 
-long CALLBACK DetourResizeBuffers(
-    IDXGISwapChain *pSwapChain,
-    UINT BufferCount,
-    UINT Width,
-    UINT Height,
-    DXGI_FORMAT NewFormat,
-    UINT SwapChainFlags)
+long CALLBACK DetourResizeBuffers(IDXGISwapChain *pSwapChain, UINT BufferCount,
+                                  UINT Width, UINT Height,
+                                  DXGI_FORMAT NewFormat, UINT SwapChainFlags)
 {
   ImGui_ImplDX11_Shutdown();
   ImGui_ImplWin32_Shutdown();
@@ -55,23 +54,24 @@ long CALLBACK DetourResizeBuffers(
 
   init = false;
 
-  return pResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
+  return pResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat,
+                        SwapChainFlags);
 }
 
-long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
+long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
                             UINT flags)
 {
   if (!init)
   {
     if (SUCCEEDED(
-            pSwapchain->GetDevice(__uuidof(ID3D11Device), (void **)&pDevice)))
+            pSwapChain->GetDevice(__uuidof(ID3D11Device), (void **)&pDevice)))
     {
       pDevice->GetImmediateContext(&pContext);
       DXGI_SWAP_CHAIN_DESC sd;
-      pSwapchain->GetDesc(&sd);
+      pSwapChain->GetDesc(&sd);
       window = sd.OutputWindow;
       ID3D11Texture2D *pBackBuffer;
-      pSwapchain->GetBuffer(0, __uuidof(ID3D11Texture2D),
+      pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D),
                             (LPVOID *)&pBackBuffer);
       pDevice->CreateRenderTargetView(pBackBuffer, NULL, &mainRenderTargetView);
       pBackBuffer->Release();
@@ -79,18 +79,23 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
           (WNDPROC)SetWindowLongPtr(window, GWLP_WNDPROC, (LONG_PTR)WndProc);
       ImGui::CreateContext();
       ImGuiIO &io = ImGui::GetIO();
+
+      ImFont *roboto = io.Fonts->AddFontFromMemoryCompressedTTF(roboto_regular_data_compressed_data, roboto_regular_data_compressed_size, 20.0f, NULL);
+      io.FontDefault = roboto;
+      statsRoboto = io.Fonts->AddFontFromMemoryCompressedTTF(roboto_regular_data_compressed_data, roboto_regular_data_compressed_size, 64.0f, NULL);
+
       io.ConfigFlags = ImGuiConfigFlags_NoMouseCursorChange;
       ImGui_ImplWin32_Init(window);
       ImGui_ImplDX11_Init(pDevice, pContext);
       init = true;
     }
     else
-      return pPresent(pSwapchain, syncInterval, flags);
+      return pPresent(pSwapChain, syncInterval, flags);
   }
 
   DXGI_SWAP_CHAIN_DESC sd;
-  pSwapchain->GetDesc(&sd);
-  pSwapchain->GetFullscreenState(&FULLSCREEN_STATE, nullptr);
+  pSwapChain->GetDesc(&sd);
+  pSwapChain->GetFullscreenState(&FULLSCREEN_STATE, nullptr);
   int iTotalDeaths = player_deaths_addr
                          ? *reinterpret_cast<const int *>(player_deaths_addr)
                          : 0;
@@ -107,11 +112,11 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
   ImGui::SetNextWindowPos(
       ImVec2((sd.BufferDesc.Width * 0.35f), sd.BufferDesc.Height * 0.5f),
       ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
   if (SHOW_IMGUI)
   {
     io.MouseDrawCursor = true;
     ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoResize);
-
     ImGui::BeginDisabled(FULLSCREEN_STATE);
     // FPS CONTROLS
     if (ImGui::Checkbox("Enable FPS Unlock",
@@ -193,10 +198,10 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       ImGui::SetTooltip(
-          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
+          "Forces custom resolution, REQUIRES RESTART TO ENABLE/DISABLE!!!");
 
     ImGui::BeginDisabled(!CUSTOM_RES_ENABLED);
-    ImGui::SetNextItemWidth(100);
+    ImGui::SetNextItemWidth(110);
     if (ImGui::InputInt("##customreswidth", &CUSTOM_RES_WIDTH))
     {
       SetIniValue("CustomResWidth", CUSTOM_RES_WIDTH);
@@ -204,10 +209,10 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       ImGui::SetTooltip(
-          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
+          "Forces custom resolution, REQUIRES RESTART TO ENABLE/DISABLE!!!");
 
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
+    ImGui::SetNextItemWidth(110);
     if (ImGui::InputInt("##customresheight", &CUSTOM_RES_HEIGHT))
     {
       SetIniValue("CustomResHeight", CUSTOM_RES_HEIGHT);
@@ -215,20 +220,10 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       ImGui::SetTooltip(
-          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
-
-    ImGui::SameLine();
-    if (ImGui::Button("Apply"))
-    {
-      ApplyResPatch();
-    }
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-      ImGui::SetTooltip(
-          "Replaces the 1920x1080 or 1280x720 resolution with custom one.");
-
+          "Forces custom resolution, REQUIRES RESTART TO ENABLE/DISABLE!!!");
     ImGui::EndDisabled();
 
-    // PLAYER DEATHS
+    // PLAYER DEATHS AND KILLS
     if (ImGui::Checkbox("Show Player Deaths",
                         (bool *)&SHOW_PLAYER_DEATHSKILLS_ENABLED))
     {
@@ -236,6 +231,29 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
                   SHOW_PLAYER_DEATHSKILLS_ENABLED);
       RefreshIniValues();
     };
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::SliderInt("Stats Text X", &PLAYER_DEATHSKILLS_X, 0, io.DisplaySize.x))
+    {
+      SetIniValue("PlayerDeathsKillsX",
+                  PLAYER_DEATHSKILLS_X);
+      RefreshIniValues();
+    }
+
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::SliderInt("Stats Text Y", &PLAYER_DEATHSKILLS_Y, 0, io.DisplaySize.y))
+    {
+      SetIniValue("PlayerDeathsKillsY",
+                  PLAYER_DEATHSKILLS_Y);
+      RefreshIniValues();
+    }
+
+    ImGui::SetNextItemWidth(200);
+    if (ImGui::SliderInt("Stats Font Size", &PLAYER_DEATHSKILLS_FZ, 16, 64))
+    {
+      SetIniValue("PlayerDeathsKillsFZ",
+                  PLAYER_DEATHSKILLS_FZ);
+      RefreshIniValues();
+    }
 
     ImGui::Text("Deaths: %d", iTotalDeaths);
     ImGui::Text("Kills: %d", (iTotalKills - iTotalDeaths));
@@ -247,12 +265,8 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
   {
     ImDrawList *draw_list = ImGui::GetForegroundDrawList();
     char textBuffer[128];
-    snprintf(textBuffer, sizeof(textBuffer), "Deaths: %d\nKills: %d",
-             iTotalDeaths, (iTotalKills - iTotalDeaths));
-
-    ImVec2 textSize = ImGui::CalcTextSize(textBuffer);
-    draw_list->AddText(ImVec2(100, 100), IM_COL32(255, 255, 255, 255),
-                       textBuffer);
+    snprintf(textBuffer, sizeof(textBuffer), "Deaths: %d\nKills: %d", iTotalDeaths, (iTotalKills - iTotalDeaths));
+    draw_list->AddText(statsRoboto, PLAYER_DEATHSKILLS_FZ, ImVec2(PLAYER_DEATHSKILLS_X, PLAYER_DEATHSKILLS_Y), IM_COL32(255, 255, 255, 255), textBuffer);
   }
 
   ImGui::EndFrame();
@@ -260,14 +274,14 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapchain, UINT syncInterval,
   pContext->OMSetRenderTargets(1, &mainRenderTargetView, NULL);
   ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-  return pPresent(pSwapchain, syncInterval, flags);
+  return pPresent(pSwapChain, syncInterval, flags);
 }
 
 BOOL WINAPI HookedSetCursorPos(int X, int Y)
 {
   if (SHOW_IMGUI)
   {
-    return TRUE;
+    return 0;
   }
   return g_OriginalSetCursorPos(X, Y);
 }
@@ -293,26 +307,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
   {
     SHOW_IMGUI = !SHOW_IMGUI;
     ImGuiIO &io = ImGui::GetIO();
-    io.MouseDrawCursor = true;
+    io.MouseDrawCursor = SHOW_IMGUI;
     return true;
   }
 
-  if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam))
-  {
-    return true;
-  }
+  (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam));
 
   return CallWindowProc(oWndProc, hWnd, uMsg, wParam, lParam);
 }
 
 bool GetSwapChainPointers()
 {
-  HWND hWnd = nullptr;
+  HWND hWnd = GetCurrentProcessWindow();
   while (!hWnd)
-  {
-    Sleep(10);
-    GetCurrentProcessWindow(&hWnd);
-  }
+    hWnd = GetCurrentProcessWindow();
 
   IDXGISwapChain *swapChain = nullptr;
   ID3D11Device *device = nullptr;
@@ -327,12 +335,12 @@ bool GetSwapChainPointers()
   sd.Windowed = TRUE;
   sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-  if (SUCCEEDED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
-                                              featureLevels, 1, D3D11_SDK_VERSION, &sd, &swapChain, &device, nullptr, nullptr)))
+  if (SUCCEEDED(D3D11CreateDeviceAndSwapChain(
+          nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, featureLevels, 1,
+          D3D11_SDK_VERSION, &sd, &swapChain, &device, nullptr, nullptr)))
   {
     void **pVtable = *reinterpret_cast<void ***>(swapChain);
 
-    // Get function pointers
     pPresentTarget = reinterpret_cast<present>(pVtable[8]);
     pResizeBuffersTarget = reinterpret_cast<resizeBuffers>(pVtable[13]);
 
@@ -340,5 +348,7 @@ bool GetSwapChainPointers()
     device->Release();
     return true;
   }
+
+  ErrorLog("Failed to get swapchain pointers!");
   return false;
 }

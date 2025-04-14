@@ -1,65 +1,35 @@
 #include "utils.h"
 #include "offset.h"
 #include "patches.h"
-#include <d3dcommon.h>
 
-typedef enum D3D_BLOB_PART
-{
-  D3D_BLOB_INPUT_SIGNATURE_BLOB,
-  D3D_BLOB_OUTPUT_SIGNATURE_BLOB,
-  D3D_BLOB_INPUT_AND_OUTPUT_SIGNATURE_BLOB,
-  D3D_BLOB_PATCH_CONSTANT_SIGNATURE_BLOB,
-  D3D_BLOB_ALL_SIGNATURE_BLOB,
-  D3D_BLOB_DEBUG_INFO,
-  D3D_BLOB_LEGACY_SHADER,
-  D3D_BLOB_XNA_PREPASS_SHADER,
-  D3D_BLOB_XNA_SHADER,
-  D3D_BLOB_PDB,
-  D3D_BLOB_PRIVATE_DATA,
-  D3D_BLOB_ROOT_SIGNATURE,
-  D3D_BLOB_DEBUG_NAME,
-  D3D_BLOB_TEST_ALTERNATE_SHADER = 0x8000,
-  D3D_BLOB_TEST_COMPILE_DETAILS,
-  D3D_BLOB_TEST_COMPILE_PERF,
-  D3D_BLOB_TEST_COMPILE_REPORT,
-} D3D_BLOB_PART;
-typedef HRESULT(CALLBACK *D3DGETBLOBPART)(LPCVOID pSrcData, SIZE_T SrcDataSize, D3D_BLOB_PART Part, UINT Flags, ID3DBlob **ppPart);
-D3DGETBLOBPART fpD3DGetBlobPart;
+typedef HRESULT(WINAPI *D3DGETBLOBPART)(LPCVOID pSrcData, SIZE_T SrcDataSize, UINT Part, UINT Flags, void **ppPart);
+HMODULE d3dHMOD = nullptr;
+D3DGETBLOBPART fpD3DGetBlobPart = nullptr;
 void SetupD3DCompilerProxy()
 {
-  UINT len = GetSystemDirectoryA(NULL, 0);
-  char *syspath = new char[len + sizeof("\\D3DCompiler_43.dll")];
-  GetSystemDirectoryA(syspath, len);
-  strcat_s(syspath, len + sizeof("\\D3DCompiler_43.dll"), "\\D3DCompiler_43.dll");
-  d3dHMOD = LoadLibraryA(syspath);
-  if (d3dHMOD)
+  char syspath[MAX_PATH];
+  if (GetSystemDirectoryA(syspath, MAX_PATH))
   {
-    fpD3DGetBlobPart = (D3DGETBLOBPART)GetProcAddress(d3dHMOD, "D3DGetBlobPart");
+    strcat_s(syspath, "\\D3DCompiler_43.dll");
+    if ((d3dHMOD = LoadLibraryA(syspath)))
+    {
+      fpD3DGetBlobPart = (D3DGETBLOBPART)GetProcAddress(d3dHMOD, "D3DGetBlobPart");
+    }
   }
-
-  delete[] syspath;
 }
-extern "C" __declspec(dllexport) HRESULT CALLBACK D3DGetBlobPart(LPCVOID pSrcData, SIZE_T SrcDataSize, D3D_BLOB_PART Part, UINT Flags, ID3DBlob **ppPart)
+extern "C" __declspec(dllexport) HRESULT WINAPI D3DGetBlobPart(LPCVOID pSrcData, SIZE_T SrcDataSize, UINT Part, UINT Flags, void **ppPart)
 {
   return fpD3DGetBlobPart(pSrcData, SrcDataSize, Part, Flags, ppPart);
-}
-void CleanupD3DCompilerProxy()
-{
-  if (d3dHMOD)
-  {
-    FreeLibrary(d3dHMOD);
-    d3dHMOD = nullptr;
-  }
-  fpD3DGetBlobPart = nullptr;
 }
 
 typedef struct
 {
   const char *key;
   const char *value;
-  int *var;
+  void *var;
+  bool isFloat = false;
 } Setting;
-constexpr Setting defaultSettings[14] = {
+constexpr Setting defaultSettings[] = {
     {"EnableFpsUnlock", "1", &FPSUNLOCK_ENABLED},
     {"FpsLimit", "165", &FPS_LIMIT},
     {"EnableFOV", "0", &FOV_ENABLED},
@@ -70,31 +40,17 @@ constexpr Setting defaultSettings[14] = {
     {"EnableAutoloot", "1", &AUTOLOOT_ENABLED},
     {"EnableIntroSkip", "1", &INTROSKIP_ENABLED},
     {"EnableBorderlessFullscreen", "1", &BORDERLESS_ENABLED},
+    {"EnableTimescale", "0", &TIMESCALE_ENABLED},
+    {"ValueTimescale", "1.0", &TIMESCALE_VALUE, true},
+    {"EnablePlayerTimescale", "0", &PLAYER_TIMESCALE_ENABLED},
+    {"ValuePlayerTimescale", "1.0", &PLAYER_TIMESCALE_VALUE, true},
     {"EnableShowPlayerDeathsKills", "0", &SHOW_PLAYER_DEATHSKILLS_ENABLED},
     {"PlayerDeathsKillsX", "100", &PLAYER_DEATHSKILLS_X},
     {"PlayerDeathsKillsY", "100", &PLAYER_DEATHSKILLS_Y},
-    {"PlayerDeathsKillsFZ", "24", &PLAYER_DEATHSKILLS_FZ}};
+    {"PlayerDeathsKillsFZ", "24", &PLAYER_DEATHSKILLS_FZ},
+};
 
-// typedef DWORD64(CALLBACK *DIRECTINPUT8CREATE)(HINSTANCE, DWORD, REFIID,
-//                                               LPVOID *, LPUNKNOWN);
-// DIRECTINPUT8CREATE fpDirectInput8Create;
-// void SetupD8Proxy()
-// {
-//   char syspath[320];
-//   GetSystemDirectoryA(syspath, 320);
-//   strcat_s(syspath, "\\dinput8.dll");
-//   auto hMod = LoadLibraryA(syspath);
-//   fpDirectInput8Create =
-//       (DIRECTINPUT8CREATE)GetProcAddress(hMod, "DirectInput8Create");
-// }
-// extern "C" __declspec(dllexport) HRESULT CALLBACK
-// DirectInput8Create(HINSTANCE hinst, DWORD dwVersion, REFIID riidltf,
-//                    LPVOID *ppvOut, LPUNKNOWN punkOuter)
-// {
-//   return fpDirectInput8Create(hinst, dwVersion, riidltf, ppvOut, punkOuter);
-// }
-
-bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size)
+bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *str)
 {
   SIZE_T bytesWritten = 0;
   BOOL result = WriteProcessMemory(GetCurrentProcess(), (LPVOID)address, data, size, &bytesWritten);
@@ -103,9 +59,9 @@ bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size)
   {
     DWORD errCode = GetLastError();
     char buf[128];
-    snprintf(buf, sizeof(buf), "WriteProcessMemory failed at 0x%p (error %lu)", (void *)address, errCode);
-    ErrorLog(buf);
-    return false;
+    snprintf(buf, sizeof(buf), "%s\nWriteProcessMemory failed at 0x%p (error %lu)", str, (void *)address, errCode);
+
+    return ErrorLog(true, buf), false;
   }
 
   return true;
@@ -143,15 +99,27 @@ uintptr_t AllocateMemoryNearAddress(uintptr_t target, size_t size)
   return 0;
 }
 
-uintptr_t DereferenceStaticX64Pointer(uintptr_t instructionAddress,
-                                      int instructionLength)
+uintptr_t DereferenceStaticX64Pointer(uintptr_t instructionAddress, int instructionLength)
 {
+  return instructionAddress + *(int32_t *)(instructionAddress + (instructionLength - 0x04)) + instructionLength;
+}
 
-  return instructionAddress +
-         *(int32_t *)(instructionAddress + (instructionLength - 0x04)) +
-         instructionLength;
+bool IsValidReadPtr(uintptr_t ptr, size_t size)
+{
+  if (!ptr)
+    return false;
 
-  ;
+  if (size == 0)
+    return false;
+
+  unsigned char buffer[size];
+  SIZE_T bytesRead = 0;
+  BOOL result = ReadProcessMemory(GetCurrentProcess(), (LPCVOID)ptr, buffer, size, &bytesRead);
+
+  if (!result || bytesRead != size)
+    return false;
+
+  return true;
 }
 
 uintptr_t GetAbsoluteAddress(uintptr_t offset)
@@ -161,25 +129,40 @@ uintptr_t GetAbsoluteAddress(uintptr_t offset)
   uintptr_t absoluteAddress = base + offset;
 
   if (absoluteAddress < base)
-  {
     return 0;
-  }
 
   return absoluteAddress;
 }
 
-void InitKillsDeathsAddresses()
+bool InitKillsDeathsAddresses()
 {
-  Sleep(8000);
+  // Deaths
+  uintptr_t pDeathOffset = GetAbsoluteAddress(player_deaths_offset + 29);
+  if (!IsValidReadPtr(pDeathOffset, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pDeathOffset2 = DereferenceStaticX64Pointer(pDeathOffset, 7);
+  if (!IsValidReadPtr(pDeathOffset2, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pPlayerDeaths = *(uintptr_t *)pDeathOffset2 + *(int32_t *)(pDeathOffset + 9);
+  if (!IsValidReadPtr(pPlayerDeaths, sizeof(uintptr_t)))
+    return false;
 
-  uintptr_t pDeathCount = GetAbsoluteAddress(player_deaths_offset + 29);
-  uintptr_t pPlayerDeaths = DereferenceStaticX64Pointer(pDeathCount, 7);
-  player_deaths_addr =
-      *(uintptr_t *)pPlayerDeaths + *(int32_t *)(pDeathCount + 9);
+  // Kills
+  uintptr_t pKillsOffset = GetAbsoluteAddress(total_kills_offset) + 7;
+  if (!IsValidReadPtr(pKillsOffset, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pKillsOffset2 = DereferenceStaticX64Pointer(pKillsOffset, 7);
+  if (!IsValidReadPtr(pKillsOffset2, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pTotalKills = *(uintptr_t *)(*(uintptr_t *)pKillsOffset2 + 0x08) + 0xDC;
+  if (!IsValidReadPtr(pTotalKills, sizeof(uintptr_t)))
+    return false;
 
-  uintptr_t pKillCount = GetAbsoluteAddress(total_kills_offset) + 7;
-  uintptr_t pPlayerKills = DereferenceStaticX64Pointer(pKillCount, 7);
-  total_kills_addr = *(uintptr_t *)(*(uintptr_t *)pPlayerKills + 0x08) + 0xDC;
+  // Final Addresses
+  player_deaths_addr = pPlayerDeaths;
+  total_kills_addr = pTotalKills;
+
+  return true;
 }
 
 HWND GetCurrentProcessWindow()
@@ -207,42 +190,52 @@ HWND GetCurrentProcessWindow()
   return currentHwnd;
 }
 
-int GetIniValue(const char *str)
-{
-  std::string &setting = config["Settings"][str];
-
-  return std::stoi(setting);
-}
-
-void SetIniValue(const char *str, int value)
-{
-  config["Settings"][str] = std::to_string(value);
-  ini.write(config);
-}
-
 void RefreshIniValues()
 {
-  bool configAvailable = (ini.read(config));
+  // Generate INI if not present
+  if (!ini.read(config))
+    ini.generate(config);
 
+  // Write missing settings if INI is present
+  // Retrieve setting values
   for (const Setting &setting : defaultSettings)
   {
     if (!config["Settings"].has(setting.key))
     {
       config["Settings"][setting.key] = setting.value;
-      if (configAvailable)
-        ini.write(config);
+      ini.write(config);
     }
 
-    *(int *)setting.var = GetIniValue(setting.key);
+    if (setting.isFloat)
+      *(float *)setting.var = GetIniValue<float>(setting.key);
+    else
+      *(int *)setting.var = GetIniValue<int>(setting.key);
   }
 
-  if (!configAvailable)
-    ini.generate(config);
-
+  // Removes old section from 1.0 version
   config.remove("settings");
 }
 
-void ErrorLog(const char *err)
+void ErrorLog(bool showMessage, const char *err, ...)
 {
-  MessageBoxA(nullptr, err, "Sekiro FPS Unlock ImGui", MB_OK | MB_ICONERROR);
+  va_list ArgList;
+  char buffer[1024];
+  va_start(ArgList, err);
+  vsnprintf(buffer, sizeof(buffer), err, ArgList);
+  va_end(ArgList);
+
+  FILE *logFile = fopen("sekirofpsimgui_log.txt", "a");
+  if (logFile)
+  {
+    time_t now = time(NULL);
+    tm *timeinfo = localtime(&now);
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "[%Y-%m-%d %H:%M:%S] ", timeinfo);
+
+    fprintf(logFile, "%s%s\n", timestamp, buffer);
+    fclose(logFile);
+  }
+
+  if (showMessage)
+    MessageBoxA(nullptr, buffer, "Sekiro FPS Unlock ImGui", MB_OK | MB_ICONERROR);
 }

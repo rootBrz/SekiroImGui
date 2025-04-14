@@ -8,13 +8,5 @@
     "CMAKE_CXX_COMPILER": "x86_64-w64-mingw32-g++",
     "CMAKE_BUILD_TYPE": "Release",
     "CMAKE_SYSTEM_NAME": "Windows"
-  },
-  "files.associations": {
-    "*.js": "javascript",
-    "*.md": "markdown",
-    "*.tsx": "typescriptreact",
-    "*.css": "tailwindcss",
-    "string": "cpp",
-    "ios": "cpp"
   }
 }

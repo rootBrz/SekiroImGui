@@ -1,25 +1,27 @@
 cmake_minimum_required(VERSION 3.10)
 project(SekiroFpsUnlockImGui CXX)
-
-if(CMAKE_HOST_WIN32)
-  set(SEKIRO_PATH "E:/SteamLibrary/steamapps/common/Sekiro")
-  find_library(D3DCOMPILER_LIB NAMES d3dcompiler_47 d3dcompiler PATHS C:/msys64/ucrt64/lib)
-  find_library(DWMAPI_LIB NAMES dwmapi PATHS C:/msys64/ucrt64/lib)
-else()
-  set(CMAKE_AR "${CMAKE_C_COMPILER}-ar")
-  set(CMAKE_NM "${CMAKE_C_COMPILER}-nm")
-  set(CMAKE_RANLIB "${CMAKE_C_COMPILER}-ranlib")
-  set(SEKIRO_PATH "/run/media/alan/games/SteamLibrary/steamapps/common/Sekiro")
-  find_library(D3DCOMPILER_LIB NAMES d3dcompiler_47 d3dcompiler PATHS usr/x86_64-w64-mingw32/sys-root/mingw/lib)
-  find_library(DWMAPI_LIB NAMES dwmapi PATHS usr/x86_64-w64-mingw32/sys-root/mingw/lib)
-endif()
-
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -fwhole-program -O3 -flto -ffat-lto-objects -ffunction-sections -fdata-sections -fomit-frame-pointer -fvisibility=hidden")
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
- 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(SEKIRO_PATH $ENV{SEKIRO_PATH})
+
+if(CMAKE_HOST_WIN32)
+  set(LIB_PATH "C:/msys64/ucrt64/lib")
+  set(CMAKE_AR "ar")
+  set(CMAKE_NM "nm")
+  set(CMAKE_RANLIB "ranlib")
+else()
+  set(LIB_PATH "usr/x86_64-w64-mingw32/sys-root/mingw/lib")
+  set(CMAKE_AR "${CMAKE_C_COMPILER}-ar")
+  set(CMAKE_NM "${CMAKE_C_COMPILER}-nm")
+  set(CMAKE_RANLIB "${CMAKE_C_COMPILER}-ranlib")
+endif()
+
+find_library(D3DCOMPILER_LIB NAMES d3dcompiler_47 d3dcompiler PATHS LIB_PATH)
+find_library(DWMAPI_LIB NAMES dwmapi PATHS LIB_PATH)
+
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+ 
 set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ImGui)
 file(GLOB IMGUI_SOURCES
     "${IMGUI_DIR}/*.cpp"
@@ -34,7 +36,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/MinHook)
 
 file(GLOB SOURCE_FILES *.cpp *.h)
 add_library(${PROJECT_NAME} SHARED ${SOURCE_FILES})
-
+target_compile_options(${PROJECT_NAME} PRIVATE -O3 -flto -ffunction-sections -fdata-sections)
 target_link_options(${PROJECT_NAME} PRIVATE -Wl,--gc-sections)
 
 target_link_libraries(${PROJECT_NAME}

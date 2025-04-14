@@ -5,7 +5,7 @@
 #include <windows.h>
 
 #pragma comment(lib, "d3d11.lib")
-#pragma comment(lib, "minhook.x64d.lib")
+#pragma comment(lib, "minhook.x64.lib")
 
 typedef BOOL(WINAPI *SetCursorPosFn)(int X, int Y);
 typedef UINT(WINAPI *GetRawInputDataFn)(HRAWINPUT hRawInput, UINT uiCommand,

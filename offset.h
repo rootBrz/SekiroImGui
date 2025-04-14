@@ -1,12 +1,13 @@
 #pragma once
 #include <cstdint>
 
+// All offsets, unless credited otherwise, was found thanks to patterns from uberhalit's SekiroFpsUnlockAndMore
 constexpr uintptr_t fps_offset = 0x11AB550;
 constexpr uintptr_t speedfix_offset = 0x7DE8AD;
 constexpr uintptr_t autoloot_offset = 0x91C606;
-constexpr uintptr_t introskip_offset = 0xE1B51B;
-constexpr uintptr_t fovsetting_offset = 0x73c688;
-constexpr uintptr_t player_deaths_offset = 0x7b3c51;
+constexpr uintptr_t introskip_offset = 0xE1B51B;     // credits to 'Katalash' for original offset
+constexpr uintptr_t fovsetting_offset = 0x73c688;    // credits to 'jackfuste' for original offset
+constexpr uintptr_t player_deaths_offset = 0x7b3c51; // credits to 'Me_TheCat' for original offset
 constexpr uintptr_t total_kills_offset = 0x7c95e5;
 
 constexpr uintptr_t resolution_pointer_offset = 0x1194d85;
@@ -27,13 +28,12 @@ constexpr uintptr_t deathpenalties1_offset = 0x11d36c7;
 constexpr uintptr_t deathpenalties2_offset = 0x11d378b;
 constexpr uintptr_t deaths_counter_offset = 0x69d73e;
 constexpr uintptr_t emblem_upgrade_offset = 0xa9ab59;
-constexpr uintptr_t timescale_offset = 0x1193f87; // also found at 0x1194f2b
-constexpr uintptr_t timescale_player_offset = 0x6c1a57;
+constexpr uintptr_t timescale_offset = 0x1193f87;       // credits to 'Zullie the Witch' for original offset, also found at 0x1194f2b
+constexpr uintptr_t timescale_player_offset = 0x6c1a57; // credits to 'Zullie the Witch' for original offset
 
-inline uintptr_t fps_addr;
-inline uintptr_t speedfix_addr;
-inline uintptr_t autoloot_addr;
-inline uintptr_t introskip_addr;
+// mine (rootBrz) offsets
+constexpr uintptr_t resolution_width_check_offset = 0x11BA038;
+constexpr uintptr_t resolution_height_check_offset = 0x11BA03E;
+
 inline uintptr_t player_deaths_addr;
 inline uintptr_t total_kills_addr;
-inline uintptr_t fovsetting_addr;

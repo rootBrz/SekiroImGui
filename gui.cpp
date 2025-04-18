@@ -1,31 +1,18 @@
 #define IMGUI_DISABLE_DEFAULT_FONT
 
 #include "gui.h"
-#include "ImGui/imgui.h"
-#include "ImGui/imgui_impl_dx11.h"
-#include "ImGui/imgui_impl_win32.h"
 #include "offset.h"
 #include "patches.h"
 #include "roboto_regular_data.h"
 #include "utils.h"
 
 HWND window = nullptr;
-ID3D11Device *pDevice = nullptr;
-ID3D11DeviceContext *pContext = nullptr;
-ID3D11RenderTargetView *mainRenderTargetView = nullptr;
 static bool init = false;
 static ImFont *statsRoboto;
+static uint8_t lastLoadingStatus = 0x00;
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
                                               WPARAM wParam, LPARAM lParam);
-
-void CreateRenderTarget(IDXGISwapChain *pSwapchain)
-{
-  ID3D11Texture2D *pBackBuffer;
-  pSwapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID *)&pBackBuffer);
-  pDevice->CreateRenderTargetView(pBackBuffer, NULL, &mainRenderTargetView);
-  pBackBuffer->Release();
-}
 
 long CALLBACK DetourResizeBuffers(IDXGISwapChain *pSwapChain, UINT BufferCount,
                                   UINT Width, UINT Height,
@@ -54,16 +41,44 @@ long CALLBACK DetourResizeBuffers(IDXGISwapChain *pSwapChain, UINT BufferCount,
 
   init = false;
 
-  return pResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat,
-                        SwapChainFlags);
+  return fnResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat,
+                         SwapChainFlags);
+}
+
+bool InitKillsDeathsAddresses()
+{
+  // Deaths
+  uintptr_t pDeathOffset = GetAbsoluteAddress(player_deaths_offset + 29);
+  if (!IsValidReadPtr(pDeathOffset, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pDeathOffset2 = DereferenceStaticX64Pointer(pDeathOffset, 7);
+  if (!IsValidReadPtr(pDeathOffset2, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pPlayerDeaths = *(uintptr_t *)pDeathOffset2 + *(int32_t *)(pDeathOffset + 9);
+  if (!IsValidReadPtr(pPlayerDeaths, sizeof(uintptr_t)))
+    return false;
+
+  // Kills
+  uintptr_t pKillsOffset = GetAbsoluteAddress(total_kills_offset) + 7;
+  if (!IsValidReadPtr(pKillsOffset, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pKillsOffset2 = DereferenceStaticX64Pointer(pKillsOffset, 7);
+  if (!IsValidReadPtr(pKillsOffset2, sizeof(uintptr_t)))
+    return false;
+  uintptr_t pTotalKills = *(uintptr_t *)(*(uintptr_t *)pKillsOffset2 + 0x08) + 0xDC;
+  if (!IsValidReadPtr(pTotalKills, sizeof(uintptr_t)))
+    return false;
+
+  // Final Addresses
+  player_deaths_addr = reinterpret_cast<int *>(pPlayerDeaths);
+  total_kills_addr = reinterpret_cast<int *>(pTotalKills);
+
+  return true;
 }
 
 void CreateImGuiLayout()
 {
   ImGuiIO &io = ImGui::GetIO();
-
-  const int totalDeaths = player_deaths_addr ? *(const int *)player_deaths_addr : 0;
-  const int totalKills = total_kills_addr ? *(const int *)total_kills_addr : 0;
 
   // Helper lambda to update the INI setting and optionally apply a patch function.
   auto updateSetting = [&](const char *key, auto value, void (*patchFunc)() = nullptr)
@@ -76,28 +91,31 @@ void CreateImGuiLayout()
 
   io.MouseDrawCursor = true;
 
-  ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoResize);
+  ImGui::Begin("Sekiro FPS Unlock ImGui", nullptr, ImGuiWindowFlags_NoResize);
 
-  // --- FPS Controls (disabled when in fullscreen) ---
-  ImGui::BeginDisabled(FULLSCREEN_STATE);
+  // --- FPS Controls ---
   if (ImGui::Checkbox("Enable FPS Unlock", reinterpret_cast<bool *>(&FPSUNLOCK_ENABLED)))
     updateSetting("EnableFpsUnlock", FPSUNLOCK_ENABLED, ApplyFramelockPatch);
-
-  if (FULLSCREEN_STATE && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-    ImGui::SetTooltip("This option is disabled because the game is in fullscreen state, change to windowed!");
 
   ImGui::SameLine();
   ImGui::SetNextItemWidth(100);
   if (ImGui::InputInt("##fpslimit", &FPS_LIMIT, 1, 10))
+  {
+    FPS_LIMIT = std::clamp(FPS_LIMIT, 30, 300);
     updateSetting("FpsLimit", FPS_LIMIT, ApplyFramelockPatch);
+  }
+
+  // --- VSync ---
+  if (ImGui::Checkbox("Enable VSync", reinterpret_cast<bool *>(&VSYNC_ENABLED)))
+    updateSetting("EnableVSync", VSYNC_ENABLED);
 
   // --- Borderless windowed toggle (disabled when in fullscreen) ---
+  ImGui::BeginDisabled(FULLSCREEN_STATE);
   if (ImGui::Checkbox("Enable Borderless Windowed", reinterpret_cast<bool *>(&BORDERLESS_ENABLED)))
     updateSetting("EnableBorderlessFullscreen", BORDERLESS_ENABLED, ApplyBorderlessPatch);
 
   if (FULLSCREEN_STATE && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("This option is disabled because the game is in fullscreen state, change to windowed!");
-
   ImGui::EndDisabled();
 
   // --- Autoloot ---
@@ -107,6 +125,18 @@ void CreateImGuiLayout()
   // --- Logo Skip ---
   if (ImGui::Checkbox("Enable Logo Skip", reinterpret_cast<bool *>(&INTROSKIP_ENABLED)))
     updateSetting("EnableIntroSkip", INTROSKIP_ENABLED);
+
+  // --- Cam Reset ---
+  if (ImGui::Checkbox("Disable Cam Reset", reinterpret_cast<bool *>(&DISABLE_CAMRESET_ENABLED)))
+    updateSetting("DisableCamReset", DISABLE_CAMRESET_ENABLED, ApplyCamResetPatch);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("If you press your target lock-on key and no target is in sight the game will reset and center the camera position and disable your input while it's doing so. Ticking this checkbox will remove this behaviour of the game.");
+
+  // --- Cam Autorotate ---
+  if (ImGui::Checkbox("Disable Cam Autorotate", reinterpret_cast<bool *>(&DISABLE_CAMERA_AUTOROTATE_ENABLED)))
+    updateSetting("DisableCamAutorotate", DISABLE_CAMERA_AUTOROTATE_ENABLED, ApplyCamAutorotatePatch);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("This will completely disable the automatic camera rotation adjustments when you are moving. This is intended for mouse users.");
 
   // --- Field of View (FOV) ---
   if (ImGui::Checkbox("FOV", reinterpret_cast<bool *>(&FOV_ENABLED)))
@@ -139,7 +169,7 @@ void CreateImGuiLayout()
 
   // --- Player Timescale ---
   if (ImGui::Checkbox("Player Timescale", reinterpret_cast<bool *>(&PLAYER_TIMESCALE_ENABLED)))
-    updateSetting("EnablePlayerTimescale", PLAYER_TIMESCALE_ENABLED);
+    updateSetting("EnablePlayerTimescale", PLAYER_TIMESCALE_ENABLED, ApplyPlayerTimescalePatch);
 
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("NOT SAFE, USE WITH CAUTION!");
@@ -148,7 +178,7 @@ void CreateImGuiLayout()
   ImGui::BeginDisabled(!PLAYER_TIMESCALE_ENABLED);
   ImGui::SetNextItemWidth(200);
   if (ImGui::SliderFloat("##playertimescalevalue", &PLAYER_TIMESCALE_VALUE, 0.1, 10, "%.2f", ImGuiSliderFlags_AlwaysClamp))
-    updateSetting("ValuePlayerTimescale", PLAYER_TIMESCALE_VALUE);
+    updateSetting("ValuePlayerTimescale", PLAYER_TIMESCALE_VALUE, ApplyPlayerTimescalePatch);
 
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("NOT SAFE, USE WITH CAUTION!");
@@ -180,7 +210,7 @@ void CreateImGuiLayout()
   ImGui::EndDisabled();
 
   // --- Player Deaths and Kills ---
-  if (ImGui::Checkbox("Show Player Deaths", reinterpret_cast<bool *>(&SHOW_PLAYER_DEATHSKILLS_ENABLED)))
+  if (ImGui::Checkbox("Show Player Stats", reinterpret_cast<bool *>(&SHOW_PLAYER_DEATHSKILLS_ENABLED)))
     updateSetting("EnableShowPlayerDeathsKills", SHOW_PLAYER_DEATHSKILLS_ENABLED);
 
   ImGui::SetNextItemWidth(200);
@@ -196,12 +226,13 @@ void CreateImGuiLayout()
     updateSetting("PlayerDeathsKillsFZ", PLAYER_DEATHSKILLS_FZ);
 
   // --- Display Totals ---
-  ImGui::Text("Deaths: %d", totalDeaths);
-  ImGui::Text("Kills: %d", (totalKills - totalDeaths));
+  if (player_deaths_addr != nullptr || total_kills_addr != nullptr)
+    ImGui::Text("Deaths: %d\nKills: %d", *player_deaths_addr, (*total_kills_addr - *player_deaths_addr));
 
   ImGui::End();
 }
 
+// Detour present to render ImGui
 long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
                             UINT flags)
 {
@@ -234,15 +265,23 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
       init = true;
     }
     else
-      return pPresent(pSwapChain, syncInterval, flags);
+      return fnPresent(pSwapChain, VSYNC_ENABLED, flags);
   }
 
-  DXGI_SWAP_CHAIN_DESC sd;
-  pSwapChain->GetDesc(&sd);
   pSwapChain->GetFullscreenState((BOOL *)&FULLSCREEN_STATE, nullptr);
 
-  int totalDeaths = player_deaths_addr ? *(const int *)player_deaths_addr : 0;
-  int totalKills = total_kills_addr ? *(const int *)total_kills_addr : 0;
+  if (player_deaths_addr == nullptr || total_kills_addr == nullptr)
+    InitKillsDeathsAddresses();
+
+  // Do some things in/after loading screen
+  GAME_LOADING = *reinterpret_cast<uint8_t *>(is_game_in_loading_addr);
+  if (lastLoadingStatus != GAME_LOADING)
+  {
+    lastLoadingStatus = GAME_LOADING;
+    ApplyFramelockPatch();
+    if (!lastLoadingStatus)
+      ApplyPlayerTimescalePatch();
+  }
 
   ImGui_ImplDX11_NewFrame();
   ImGui_ImplWin32_NewFrame();
@@ -252,17 +291,17 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
   ImVec2 displaySize = ImGui::GetIO().DisplaySize;
   io.MouseDrawCursor = false;
   ImGui::SetNextWindowPos(
-      ImVec2((sd.BufferDesc.Width * 0.35f), sd.BufferDesc.Height * 0.5f),
+      ImVec2((io.DisplaySize.x * 0.35f), io.DisplaySize.y * 0.5f),
       ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
   if (SHOW_IMGUI)
     CreateImGuiLayout();
 
-  if (SHOW_PLAYER_DEATHSKILLS_ENABLED)
+  if (SHOW_PLAYER_DEATHSKILLS_ENABLED && (player_deaths_addr != nullptr || total_kills_addr != nullptr))
   {
     ImDrawList *draw_list = ImGui::GetForegroundDrawList();
     char textBuffer[128];
-    snprintf(textBuffer, sizeof(textBuffer), "Deaths: %d\nKills: %d", totalDeaths, (totalKills - totalDeaths));
+    snprintf(textBuffer, sizeof(textBuffer), "Deaths: %d\nKills: %d", *player_deaths_addr, (*total_kills_addr - *player_deaths_addr));
     draw_list->AddText(statsRoboto, PLAYER_DEATHSKILLS_FZ, ImVec2(PLAYER_DEATHSKILLS_X, PLAYER_DEATHSKILLS_Y), IM_COL32(255, 255, 255, 255), textBuffer);
   }
 
@@ -271,19 +310,56 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
   pContext->OMSetRenderTargets(1, &mainRenderTargetView, NULL);
   ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
-  return pPresent(pSwapChain, syncInterval, flags);
+  return fnPresent(pSwapChain, GAME_LOADING ? 0 : VSYNC_ENABLED, flags);
 }
 
-BOOL WINAPI HookedSetCursorPos(int X, int Y)
+// Detour SetCursorPos to unstuck cursor from center of screen if ImGui open
+BOOL WINAPI DetourSetCursorPos(int X, int Y)
 {
   if (SHOW_IMGUI)
   {
     return 0;
   }
-  return g_OriginalSetCursorPos(X, Y);
+  return fnSetCursorPos(X, Y);
 }
 
-UINT WINAPI HookedGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand,
+// Detour ChangeDisplaySettingsExW to change of display settings to 60hz refresh rate
+long WINAPI DetourChangeDisplaySettingsExW(LPCWSTR lpszDeviceName, DEVMODEW *lpDevMode, HWND hwnd, DWORD dwflags, LPVOID lParam)
+{
+  if (lpDevMode != nullptr)
+  {
+    u_int maxRefreshRate = 0;
+    DEVMODEW devMode = {};
+    devMode.dmSize = sizeof(DEVMODEW);
+
+    for (DWORD i = 0; EnumDisplaySettingsW(lpszDeviceName, i, &devMode); i++)
+    {
+      if (devMode.dmPelsWidth == lpDevMode->dmPelsWidth &&
+          devMode.dmPelsHeight == lpDevMode->dmPelsHeight &&
+          devMode.dmBitsPerPel == lpDevMode->dmBitsPerPel)
+      {
+        if (devMode.dmDisplayFrequency > maxRefreshRate)
+        {
+          maxRefreshRate = devMode.dmDisplayFrequency;
+        }
+      }
+    }
+
+    if (maxRefreshRate > 0)
+    {
+      lpDevMode->dmDisplayFrequency = maxRefreshRate;
+    }
+
+    LogMessage(LogLevel::Info, false, "Max Refresh Rate for %dx%d @ %dbpp: %d Hz",
+               lpDevMode->dmPelsWidth, lpDevMode->dmPelsHeight,
+               lpDevMode->dmBitsPerPel, lpDevMode->dmDisplayFrequency);
+  }
+
+  return fnChangeDisplaySettingsExW(lpszDeviceName, lpDevMode, hwnd, dwflags, lParam);
+}
+
+// Detour GetRawInputData to disable input if ImGui open
+UINT WINAPI DetourGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand,
                                   LPVOID pData, PUINT pcbSize,
                                   UINT cbSizeHeader)
 {
@@ -294,11 +370,11 @@ UINT WINAPI HookedGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand,
 
     return 0;
   }
-  return g_OriginalGetRawInputData(hRawInput, uiCommand, pData, pcbSize,
-                                   cbSizeHeader);
+  return fnGetRawInputData(hRawInput, uiCommand, pData, pcbSize,
+                           cbSizeHeader);
 }
 
-LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+LRESULT WINAPI WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
   if (uMsg == WM_KEYDOWN && wParam == VK_HOME)
   {
@@ -315,37 +391,56 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 bool GetSwapChainPointers()
 {
-  HWND hWnd;
-  while (!(hWnd = GetCurrentProcessWindow()))
-    Sleep(10);
+  Sleep(3000);
+
+  WNDCLASSEXW wc = {
+      sizeof(WNDCLASSEXW), CS_CLASSDC, DefWindowProc, 0, 0,
+      GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr,
+      L"DummyWindowClass", nullptr};
+  RegisterClassExW(&wc);
+  HWND hWnd = CreateWindowExW(
+      0, L"DummyWindowClass", L"Dummy", WS_OVERLAPPEDWINDOW,
+      0, 0, 1, 1, nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
+  ShowWindow(hWnd, SW_HIDE);
+  UpdateWindow(hWnd);
 
   IDXGISwapChain *swapChain = nullptr;
   ID3D11Device *device = nullptr;
   DXGI_SWAP_CHAIN_DESC sd = {0};
-  const D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_0};
+  D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_0};
 
   sd.BufferCount = 1;
+  sd.BufferDesc.Height = 1;
+  sd.BufferDesc.Width = 1;
+  sd.SampleDesc.Count = 1;
   sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
   sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   sd.OutputWindow = hWnd;
-  sd.SampleDesc.Count = 1;
   sd.Windowed = TRUE;
   sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
-  if (SUCCEEDED(D3D11CreateDeviceAndSwapChain(
-          nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, featureLevels, 1,
-          D3D11_SDK_VERSION, &sd, &swapChain, &device, nullptr, nullptr)))
+  HRESULT hr = D3D11CreateDeviceAndSwapChain(
+      nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, featureLevels,
+      1, D3D11_SDK_VERSION, &sd, &swapChain,
+      &device, nullptr, nullptr);
+
+  if (FAILED(hr))
   {
-    void **pVtable = *reinterpret_cast<void ***>(swapChain);
-
-    pPresentTarget = reinterpret_cast<present>(pVtable[8]);
-    pResizeBuffersTarget = reinterpret_cast<resizeBuffers>(pVtable[13]);
-
-    swapChain->Release();
-    device->Release();
-    return true;
+    LogMessage(LogLevel::Error, true, "D3D11CreateDeviceAndSwapChain failed. HRESULT: 0x%08X", hr);
+    DestroyWindow(hWnd);
+    UnregisterClassW(L"DummyWindowClass", GetModuleHandle(nullptr));
+    return false;
   }
 
-  ErrorLog(false, "Failed to get swapchain pointers!");
-  return false;
+  void **pVtable = *reinterpret_cast<void ***>(swapChain);
+  pPresent = reinterpret_cast<present>(pVtable[8]);
+  pResizeBuffers = reinterpret_cast<resizeBuffers>(pVtable[13]);
+
+  swapChain->Release();
+  device->Release();
+  DestroyWindow(hWnd);
+  UnregisterClassW(L"DummyWindowClass", GetModuleHandle(nullptr));
+
+  LogMessage(LogLevel::Success, false, "Successfully retrieved swap chain function pointers.");
+  return true;
 }

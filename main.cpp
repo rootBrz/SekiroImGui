@@ -1,65 +1,75 @@
 #include "MinHook.h"
 #include "gui.h"
-#include "md5c/md5.h"
+#include "offset.h"
 #include "patches.h"
 #include "utils.h"
+#include "version.h"
 
-void InitHooks()
+void InitUser32Hooks()
 {
   HMODULE hUser32 = GetModuleHandleA("user32.dll");
   LPVOID pSetCursorPos = (LPVOID)GetProcAddress(hUser32, "SetCursorPos");
   LPVOID pGetRawInputData = (LPVOID)GetProcAddress(hUser32, "GetRawInputData");
+  LPVOID pChangeDisplaySettingsExW = (LPVOID)GetProcAddress(hUser32, "ChangeDisplaySettingsExW");
 
-  if (MH_CreateHook(pSetCursorPos, (LPVOID)&HookedSetCursorPos, (LPVOID *)&g_OriginalSetCursorPos) == MH_OK)
+  if (MH_CreateHook(pSetCursorPos, (LPVOID)&DetourSetCursorPos, (LPVOID *)&fnSetCursorPos) == MH_OK)
     if (MH_EnableHook(pSetCursorPos) != MH_OK)
-      ErrorLog(false, "SetCursorPos hook failed");
+      LogMessage(LogLevel::Error, false, "SetCursorPos hook failed");
 
-  if (MH_CreateHook(pGetRawInputData, (LPVOID)&HookedGetRawInputData, (LPVOID *)&g_OriginalGetRawInputData) == MH_OK)
-    if (MH_EnableHook(pGetRawInputData))
-      ErrorLog(false, "GetRawInputData hook failed");
+  if (MH_CreateHook(pGetRawInputData, (LPVOID)&DetourGetRawInputData, (LPVOID *)&fnGetRawInputData) == MH_OK)
+    if (MH_EnableHook(pGetRawInputData) != MH_OK)
+      LogMessage(LogLevel::Error, false, "GetRawInputData hook failed");
 
-  if (pPresentTarget)
-    if (MH_CreateHook((LPVOID)pPresentTarget, (LPVOID)&DetourPresent, (LPVOID *)&pPresent) == MH_OK)
-      if (MH_EnableHook((LPVOID)pPresentTarget))
-        ErrorLog(false, "PresentTarget hook failed");
-
-  if (pResizeBuffersTarget)
-    if (MH_CreateHook((LPVOID)pResizeBuffersTarget, (LPVOID)&DetourResizeBuffers, (LPVOID *)&pResizeBuffers) == MH_OK)
-      if (MH_EnableHook((LPVOID)pResizeBuffersTarget))
-        ErrorLog(false, "ResizeBuffersTarget hook failed");
+  if (MH_CreateHook(pChangeDisplaySettingsExW, (LPVOID)&DetourChangeDisplaySettingsExW, (LPVOID *)&fnChangeDisplaySettingsExW) == MH_OK)
+    if (MH_EnableHook(pChangeDisplaySettingsExW) != MH_OK)
+      LogMessage(LogLevel::Error, false, "ChangeDisplaySettingsExW hook failed");
 }
 
-bool ComputeExeMD5()
+void InitSwapchainHooks()
 {
-  static const char *expectedHash = "0E0A8407C78E896A73D8F27DA3D4C0CC";
-  char path[MAX_PATH], actualHash[33] = {0};
-  uint8_t binaryHash[16];
-  FILE *file;
+  if (pPresent)
+    if (MH_CreateHook((LPVOID)pPresent, (LPVOID)&DetourPresent, (LPVOID *)&fnPresent) == MH_OK)
+      if (MH_EnableHook((LPVOID)pPresent) != MH_OK)
+        LogMessage(LogLevel::Error, false, "Present hook failed");
 
-  if (!GetModuleFileNameA(0, path, MAX_PATH) || fopen_s(&file, path, "rb") || !file)
-    return ErrorLog(true, "MD5 check failed"), false;
-
-  md5File(file, binaryHash);
-  fclose(file);
-
-  for (int i = 0; i < 16; i++)
-    sprintf(actualHash + i * 2, "%02X", binaryHash[i]);
-
-  return !strcmp(actualHash, expectedHash) || (ErrorLog(true, "Hash mismatch\nCurrent: %s\nExpected: %s", actualHash, expectedHash), false);
+  if (pResizeBuffers)
+    if (MH_CreateHook((LPVOID)pResizeBuffers, (LPVOID)&DetourResizeBuffers, (LPVOID *)&fnResizeBuffers) == MH_OK)
+      if (MH_EnableHook((LPVOID)pResizeBuffers) != MH_OK)
+        LogMessage(LogLevel::Error, false, "ResizeBuffers hook failed");
 }
 
-DWORD WINAPI FreezeThread(LPVOID lpParam)
+void Shutdown()
 {
-  while (!INITIALIZED)
-    Sleep(10);
+  INITIALIZED = false;
+  MH_DisableHook(MH_ALL_HOOKS);
+  MH_Uninitialize();
+  ImGui_ImplDX11_Shutdown();
+  ImGui_ImplWin32_Shutdown();
+  ImGui::DestroyContext();
 
-  while (INITIALIZED)
+  if (mainRenderTargetView)
   {
-    ApplyPlayerTimescalePatch();
-    Sleep(100);
+    mainRenderTargetView->Release();
+    mainRenderTargetView = NULL;
+  }
+  if (pContext)
+  {
+    pContext->Release();
+    pContext = NULL;
+  }
+  if (pDevice)
+  {
+    pDevice->Release();
+    pDevice = NULL;
   }
 
-  return true;
+  SetWindowLongPtr(GetCurrentProcessWindow(), GWLP_WNDPROC, (LONG_PTR)(oWndProc));
+
+  LogMessage(LogLevel::Info, false, "Shutdown initiated.");
+  Sleep(100);
+
+  // Necessary because in pair with SLE game hungs on exit, don't see any cons
+  ExitProcess(0);
 }
 
 DWORD WINAPI InitThread(LPVOID lpParam)
@@ -69,8 +79,8 @@ DWORD WINAPI InitThread(LPVOID lpParam)
   if (!ComputeExeMD5())
     return false;
 
-  remove("sekirofpsimgui_log.txt");
-  ErrorLog(false, "Sekiro FPS ImGui log started");
+  remove("sekirofpsimgui.log");
+  LogMessage(LogLevel::Info, false, "Sekiro FPS Unlock ImGui v%s log initialized.", PROJECT_VERSION_STRING);
 
   MH_Initialize();
   RefreshIniValues();
@@ -79,23 +89,39 @@ DWORD WINAPI InitThread(LPVOID lpParam)
   while (!GetCurrentProcessWindow())
     Sleep(10);
 
+  InitUser32Hooks();
+
+  ApplyFullscreenHZPatch();
+  is_game_in_loading_addr = GetAbsoluteAddress(is_game_in_loading_offset);
   ApplyBorderlessPatch();
   ApplyIntroPatch();
+  ApplyCamResetPatch();
+  ApplyCamAutorotatePatch();
   ApplyAutolootPatch();
   ApplyFramelockPatch();
   ApplyFovPatch();
   while (!ApplyTimescalePatch())
     Sleep(10);
-  while (!ApplyPlayerTimescalePatch())
-    Sleep(10);
   INITIALIZED = true;
 
-  while (!InitKillsDeathsAddresses())
-    Sleep(10);
-
-  Sleep(3000);
   GetSwapChainPointers();
-  InitHooks();
+  InitSwapchainHooks();
+
+  while (true)
+  {
+    HWND hWnd = GetCurrentProcessWindow();
+    if (!IsWindow(hWnd))
+      break;
+
+    DWORD exitCode = 0;
+    GetExitCodeProcess(GetCurrentProcess(), &exitCode);
+    if (exitCode != STILL_ACTIVE)
+      break;
+
+    Sleep(500);
+  }
+
+  Shutdown();
 
   return true;
 }
@@ -107,7 +133,6 @@ BOOL WINAPI DllMain(HMODULE hModule, DWORD fdwReason, LPVOID lpvReserved)
   {
     DisableThreadLibraryCalls(hModule);
     CreateThread(NULL, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(InitThread), NULL, 0, NULL);
-    CreateThread(NULL, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(FreezeThread), NULL, 0, NULL);
   }
 
   return true;

@@ -1,13 +1,10 @@
 #include "patches.h"
 #include "offset.h"
 #include "utils.h"
-#include <cstdint>
 
 uintptr_t fovData;
 uintptr_t speedData;
 constexpr double PI = 3.14159265358979323846;
-float defaultTimescale;
-float defaultPlayerTimescale;
 
 typedef struct Patch
 {
@@ -28,29 +25,10 @@ constexpr static const float speedFixMatrix[]{
     67.0f, 78.8438f, 80.0f, 84.0f, 90.0f, 93.8f, 100.0f,
     120.0f, 127.0f, 128.0f, 130.0f, 140.0f, 144.0f, 150.0f};
 
-// typedef struct
-// {
-//   int minWidth;
-//   uintptr_t offset;
-//   uint8_t disable[8];
-//   uintptr_t address() const
-//   {
-//     return GetAbsoluteAddress(offset);
-//   }
-// } ResPatch;
-
-// constexpr static ResPatch resPatch[4]{
-//     {3840, resolution_default_3840_offset, {0x00, 0x0F, 0x00, 0x00, 0x70, 0x08, 0x00, 0x00}},
-//     {2560, resolution_default_2560_offset, {0x00, 0x0A, 0x00, 0x00, 0xA0, 0x05, 0x00, 0x00}},
-//     {1920, resolution_default_1920_offset, {0x80, 0x07, 0x00, 0x00, 0x38, 0x04, 0x00, 0x00}},
-//     {1280, resolution_default_1280_offset, {0x00, 0x05, 0x00, 0x00, 0xD0, 0x02, 0x00, 0x00}},
-//     {840, resolution_default_840_offset, {0x48, 0x03, 0x00, 0x00, 0xC2, 0x01, 0x00, 0x00}}
-// };
-
-void ApplySpeedFix(float FPS)
+void ApplySpeedFix(float fps)
 {
   uintptr_t speedFixAddr = GetAbsoluteAddress(speedfix_offset + 15);
-  float idealSpeedFix = FPS / 2.0f;
+  float idealSpeedFix = fps / 2.0f;
   float closestSpeedFix = 30.0f; // Default value for 60 fps
   if (!speedData)
     speedData = AllocateMemoryNearAddress(speedFixAddr, sizeof(float));
@@ -62,7 +40,7 @@ void ApplySpeedFix(float FPS)
 
   Patch patches[] = {
       {speedData, &closestSpeedFix, sizeof(float), "Write speed value to allocated memory"},
-      {speedFixAddr, &relative, sizeof(int32_t), "Apply speed fix"},
+      {speedFixAddr, &relative, sizeof(int32_t), "Patch speed value"},
   };
 
   for (const Patch &patch : patches)
@@ -75,17 +53,21 @@ void ApplyFramelockPatch()
   if (!INITIALIZED && !FPSUNLOCK_ENABLED)
     return;
 
-  FPS_LIMIT = FPSUNLOCK_ENABLED ? std::clamp(FPS_LIMIT, 30, 300) : 60.0f;
-  const float targetDelta = 1.0f / FPS_LIMIT;
+  float fpsLimit = FPSUNLOCK_ENABLED ? std::clamp(FPS_LIMIT, 30, 300) : 60.0f;
+  const float targetDelta = 1.0f / (GAME_LOADING ? 300.0f : fpsLimit);
 
   if (!WriteProtectedMemory(GetAbsoluteAddress(fps_offset), &targetDelta, sizeof(float), "Patch framelock"))
     return;
 
-  ApplySpeedFix(FPS_LIMIT);
+  if (!GAME_LOADING)
+    ApplySpeedFix(fpsLimit);
 }
 
 void ApplyAutolootPatch()
 {
+  if (!AUTOLOOT_ENABLED && !INITIALIZED)
+    return;
+
   constexpr uint8_t patchEnable[2] = {0xB0, 0x01};  // mov al,1
   constexpr uint8_t patchDisable[2] = {0x32, 0xC0}; // xor al,al
 
@@ -140,17 +122,17 @@ void ApplyFovPatch()
   if (!INITIALIZED && !FOV_ENABLED)
     return;
 
-  uintptr_t fovsetting_addr = GetAbsoluteAddress(fovsetting_offset) + 8;
+  uintptr_t fovAddr = GetAbsoluteAddress(fovsetting_offset) + 8;
   if (!fovData)
-    fovData = AllocateMemoryNearAddress(fovsetting_addr, sizeof(float));
+    fovData = AllocateMemoryNearAddress(fovAddr, sizeof(float));
 
   float fov = std::clamp(FOV_VALUE, -95, 95);
   float fovValue = FOV_ENABLED ? PI / 180.0 * (fov / 100.0f + 1) : 0.0174533f;
-  int32_t relative = (int32_t)(fovData - (fovsetting_addr + sizeof(int32_t)));
+  int32_t relative = (int32_t)(fovData - (fovAddr + sizeof(int32_t)));
 
   Patch patches[] = {
       {fovData, &fovValue, sizeof(float), "Write FOV value to allocated memory"},
-      {fovsetting_addr, &relative, sizeof(relative), "Patch FOV"},
+      {fovAddr, &relative, sizeof(relative), "Patch FOV"},
   };
 
   for (const Patch &patch : patches)
@@ -209,47 +191,138 @@ bool ApplyTimescalePatch()
   if (!IsValidReadPtr(globalTimescaleAddr, sizeof(uintptr_t)))
     return false;
 
-  if (!defaultTimescale)
-    defaultTimescale = *(float *)globalTimescaleAddr;
-
-  float timescale = TIMESCALE_ENABLED ? std::clamp(TIMESCALE_VALUE, 0.1f, 10.0f) : defaultTimescale;
+  float timescale = TIMESCALE_ENABLED ? std::clamp(TIMESCALE_VALUE, 0.1f, 10.0f) : 1.0f;
 
   return WriteProtectedMemory(globalTimescaleAddr, &timescale, sizeof(float), "Patch global timescale");
 }
 
-bool ApplyPlayerTimescalePatch()
+void ApplyPlayerTimescalePatch()
 {
   if (!INITIALIZED && !PLAYER_TIMESCALE_ENABLED)
-    return true;
+    return;
 
   uintptr_t timescaleAddr = GetAbsoluteAddress(timescale_player_offset);
   if (!IsValidReadPtr(timescaleAddr, sizeof(uintptr_t)))
-    return false;
-
+    return;
   uintptr_t timescaleOffset = DereferenceStaticX64Pointer(timescaleAddr, 7);
   if (!IsValidReadPtr(timescaleOffset, sizeof(uintptr_t)))
-    return false;
-
+    return;
   uintptr_t timescaleOffset2 = *(int64_t *)timescaleOffset + 0x0088;
   if (!IsValidReadPtr(timescaleOffset2, sizeof(uintptr_t)))
-    return false;
-
+    return;
   uintptr_t timescaleOffset3 = *(int64_t *)timescaleOffset2 + 0x1FF8;
   if (!IsValidReadPtr(timescaleOffset3, sizeof(uintptr_t)))
-    return false;
-
+    return;
   uintptr_t timescaleOffset4 = *(int64_t *)timescaleOffset3 + 0x0028;
   if (!IsValidReadPtr(timescaleOffset4, sizeof(uintptr_t)))
-    return false;
-
+    return;
   uintptr_t playerTimescaleAddr = *(int64_t *)timescaleOffset4 + 0x0D00;
-  if (!IsValidReadPtr(timescaleOffset4, sizeof(uintptr_t)))
-    return false;
+  if (!IsValidReadPtr(playerTimescaleAddr, sizeof(uintptr_t)))
+    return;
 
-  if (!defaultPlayerTimescale)
-    defaultPlayerTimescale = *(float *)playerTimescaleAddr;
+  float timescale = PLAYER_TIMESCALE_ENABLED ? std::clamp(PLAYER_TIMESCALE_VALUE, 0.1f, 10.0f) : 1.0f;
 
-  float timescale = PLAYER_TIMESCALE_ENABLED ? std::clamp(PLAYER_TIMESCALE_VALUE, 0.1f, 10.0f) : defaultPlayerTimescale;
+  WriteProtectedMemory(playerTimescaleAddr, &timescale, sizeof(float), "Patch player timescale");
+}
 
-  return WriteProtectedMemory(playerTimescaleAddr, &timescale, sizeof(float), "Patch player timescale");
+void ApplyCamResetPatch()
+{
+  if (!INITIALIZED && !DISABLE_CAMRESET_ENABLED)
+    return;
+
+  uintptr_t camResetAddr = GetAbsoluteAddress(camreset_lockon_offset) + 6;
+  constexpr uint8_t camResetDisable[1] = {0x00};
+  constexpr uint8_t camResetEnable[1] = {0x01};
+
+  WriteProtectedMemory(camResetAddr, DISABLE_CAMRESET_ENABLED ? camResetDisable : camResetEnable, sizeof(uint8_t), "Patch cam reset");
+}
+
+// Removes hardvalue of 60 hz before call of ResizeTarget
+void ApplyFullscreenHZPatch()
+{
+  uintptr_t numAddr = GetAbsoluteAddress(fullscreen_refreshrate_num);
+
+  constexpr uint8_t patchEnable[18] = {
+      0xB8, 0x00, 0x00, 0x00, 0x00, // mov eax, 0           Refresh Rate Numerator before calling ResizeTarget
+      0x89, 0x44, 0x24, 0x28,       // mov [rsp+28], eax
+      0xB8, 0x00, 0x00, 0x00, 0x00, // mov eax, 0           Refresh Rate Denumerator before calling ResizeTarget
+      0x89, 0x44, 0x24, 0x2C        // mov [rsp+2C], eax
+  };
+
+  uintptr_t detour = InjectShellcodeWithJumpBack(numAddr, patchEnable, sizeof(patchEnable), 14, "Write fullscreen hz fix");
+
+  WriteProtectedMemory(numAddr, RelJmpBytes(14, (int32_t)(detour - (numAddr + 5))).data(), 14, "Patch fullscreen hz fix");
+}
+
+// Addresses for camera adjustments
+uintptr_t camAdjustPitchAddr;
+uintptr_t camAdjustPitchXYAddr;
+uintptr_t camAdjustYawZAddr;
+uintptr_t camAdjustYawXYAddr;
+
+// Original bytes (before patching)
+uint8_t camAdjustPitchOrigBytes[7];
+uint8_t camAdjustPitchXYOrigBytes[12];
+uint8_t camAdjustYawZAddrOrigBytes[8];
+uint8_t camAdjustYawXYAddrOrigBytes[8];
+
+// Addresses of injected shellcode
+uintptr_t camAdjustPitchCode;
+uintptr_t camAdjustPitchXYCode;
+uintptr_t camAdjustYawZCode;
+uintptr_t camAdjustYawXYCode;
+
+// Camera Pitch (Z-axis)
+constexpr uint8_t INJECT_CAMADJUST_PITCH_SHELLCODE[] = {
+    0x0F, 0x28, 0xA6, 0x70, 0x01, 0x00, 0x00, // movaps xmm4, [rsi+0x170]
+    0x0F, 0x29, 0xA5, 0x70, 0x08, 0x00, 0x00  // movaps [rbp+0x870], xmm4
+};
+
+// Camera Yaw (Z-axis)
+constexpr uint8_t INJECT_CAMADJUST_YAW_Z_SHELLCODE[] = {
+    0xF3, 0x0F, 0x10, 0x86, 0x74, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x174]
+    0xF3, 0x0F, 0x11, 0x86, 0x74, 0x01, 0x00, 0x00  // movss [rsi+0x174], xmm0
+};
+
+// Camera Pitch (XY-axis)
+constexpr uint8_t INJECT_CAMADJUST_PITCH_XY_SHELLCODE[] = {
+    0xF3, 0x0F, 0x10, 0x86, 0x70, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x170]
+    0xF3, 0x0F, 0x11, 0x00,                         // movss [rax], xmm0
+    0xF3, 0x0F, 0x10, 0x00,                         // movss xmm0, [rax]
+    0xF3, 0x0F, 0x11, 0x86, 0x70, 0x01, 0x00, 0x00  // movss [rsi+0x170], xmm0
+};
+
+// Camera Yaw (XY-axis)
+constexpr uint8_t INJECT_CAMADJUST_YAW_XY_SHELLCODE[] = {
+    0xF3, 0x0F, 0x10, 0x86, 0x74, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x174]
+    0xF3, 0x0F, 0x11, 0x86, 0x74, 0x01, 0x00, 0x00  // movss [rsi+0x174], xmm0
+};
+
+void ApplyCamAutorotatePatch()
+{
+  if (!INITIALIZED)
+  {
+    camAdjustPitchAddr = GetAbsoluteAddress(camadjust_pitch_offset);
+    camAdjustPitchXYAddr = GetAbsoluteAddress(camadjust_pitch_xy_offset);
+    camAdjustYawZAddr = GetAbsoluteAddress(camadjust_yaw_z_offset) + 5;
+    camAdjustYawXYAddr = GetAbsoluteAddress(camadjust_yaw_xy_offset) + 5;
+
+    ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustPitchAddr, camAdjustPitchOrigBytes, sizeof(camAdjustPitchOrigBytes), nullptr);
+    ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustPitchXYAddr, camAdjustPitchXYOrigBytes, sizeof(camAdjustPitchXYOrigBytes), nullptr);
+    ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustYawZAddr, camAdjustYawZAddrOrigBytes, sizeof(camAdjustYawZAddrOrigBytes), nullptr);
+    ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustYawXYAddr, camAdjustYawXYAddrOrigBytes, sizeof(camAdjustYawXYAddrOrigBytes), nullptr);
+
+    camAdjustPitchCode = InjectShellcodeWithJumpBack(camAdjustPitchAddr, INJECT_CAMADJUST_PITCH_SHELLCODE, sizeof(INJECT_CAMADJUST_PITCH_SHELLCODE), sizeof(camAdjustPitchOrigBytes), "Write cam adjust pitch code to allocated memory");
+    camAdjustPitchXYCode = InjectShellcodeWithJumpBack(camAdjustPitchXYAddr, INJECT_CAMADJUST_PITCH_XY_SHELLCODE, sizeof(INJECT_CAMADJUST_PITCH_XY_SHELLCODE), sizeof(camAdjustPitchXYOrigBytes), "Write cam adjust pitch XY code to allocated memory");
+    camAdjustYawZCode = InjectShellcodeWithJumpBack(camAdjustYawZAddr, INJECT_CAMADJUST_YAW_Z_SHELLCODE, sizeof(INJECT_CAMADJUST_YAW_Z_SHELLCODE), sizeof(camAdjustYawZAddrOrigBytes), "Write cam adjust yaw Z code to allocated memory");
+    camAdjustYawXYCode = InjectShellcodeWithJumpBack(camAdjustYawXYAddr, INJECT_CAMADJUST_YAW_XY_SHELLCODE, sizeof(INJECT_CAMADJUST_YAW_XY_SHELLCODE), sizeof(camAdjustYawXYAddrOrigBytes), "Write cam adjust yaw XY code to allocated memory");
+  }
+
+  if (!INITIALIZED && !DISABLE_CAMERA_AUTOROTATE_ENABLED)
+    return;
+
+  WriteProtectedMemory(camAdjustPitchAddr, DISABLE_CAMERA_AUTOROTATE_ENABLED ? RelJmpBytes(7, (int32_t)(camAdjustPitchCode - (camAdjustPitchAddr + 5))).data() : camAdjustPitchOrigBytes, sizeof(camAdjustPitchOrigBytes), "Patch cam adjust pitch");
+  WriteProtectedMemory(camAdjustPitchXYAddr, DISABLE_CAMERA_AUTOROTATE_ENABLED ? RelJmpBytes(12, (int32_t)(camAdjustPitchXYCode - (camAdjustPitchXYAddr + 5))).data() : camAdjustPitchXYOrigBytes, sizeof(camAdjustPitchXYOrigBytes), "Patch cam adjust pitch XY");
+  WriteProtectedMemory(camAdjustYawZAddr, DISABLE_CAMERA_AUTOROTATE_ENABLED ? RelJmpBytes(8, (int32_t)(camAdjustYawZCode - (camAdjustYawZAddr + 5))).data() : camAdjustYawZAddrOrigBytes, sizeof(camAdjustYawZAddrOrigBytes), "Patch cam adjust yaw Z");
+  WriteProtectedMemory(camAdjustYawXYAddr, DISABLE_CAMERA_AUTOROTATE_ENABLED ? RelJmpBytes(8, (int32_t)(camAdjustYawXYCode - (camAdjustYawXYAddr + 5))).data() : camAdjustYawXYAddrOrigBytes, sizeof(camAdjustYawXYAddrOrigBytes), "Patch cam adjust yaw XY");
 }

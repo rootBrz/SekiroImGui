@@ -1,4 +1,6 @@
 #pragma once
+#include <atomic>
+#include <cstdint>
 
 void ApplyFramelockPatch();
 void ApplyAutolootPatch();
@@ -8,9 +10,13 @@ void ApplyFovPatch();
 void ApplyResPatch();
 void ApplyResScalingFix();
 bool ApplyTimescalePatch();
-bool ApplyPlayerTimescalePatch();
+void ApplyPlayerTimescalePatch();
+void ApplyCamResetPatch();
+void ApplyCamAutorotatePatch();
+void ApplyFullscreenHZPatch();
 
-volatile inline bool INITIALIZED = false;
+inline std::atomic_bool INITIALIZED = false;
+inline uint8_t GAME_LOADING;
 
 inline bool FULLSCREEN_STATE;
 inline int FPS_LIMIT;
@@ -31,3 +37,6 @@ inline int TIMESCALE_ENABLED;
 inline int PLAYER_TIMESCALE_ENABLED;
 inline float TIMESCALE_VALUE;
 inline float PLAYER_TIMESCALE_VALUE;
+inline int DISABLE_CAMRESET_ENABLED;
+inline int DISABLE_CAMERA_AUTOROTATE_ENABLED;
+inline int VSYNC_ENABLED;

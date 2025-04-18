@@ -4,17 +4,25 @@
 #include "mini/ini.h"
 #include <windows.h>
 
+enum class LogLevel
+{
+  Info,
+  Error,
+  Success
+};
+
 HWND GetCurrentProcessWindow();
-bool InitKillsDeathsAddresses();
-bool IsValidReadPtr(uintptr_t ptr, size_t size);
-bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *str);
+bool IsValidReadPtr(uintptr_t addr, size_t size);
+bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *msg);
 uintptr_t GetAbsoluteAddress(uintptr_t offset);
 uintptr_t DereferenceStaticX64Pointer(uintptr_t instructionAddress, int instructionLength);
-uintptr_t AllocateMemoryNearAddress(uintptr_t target, size_t size);
+uintptr_t AllocateMemoryNearAddress(uintptr_t target, size_t size, bool executable = false);
+uintptr_t InjectShellcodeWithJumpBack(uintptr_t targetAddr, const uint8_t *shellcode, size_t shellcodeSize, size_t patchSize, const char *msg);
+std::vector<uint8_t> RelJmpBytes(int length, int32_t relative);
 void RefreshIniValues();
-void ErrorLog(bool showMessage, const char *err, ...);
+void LogMessage(LogLevel level, bool showMessage, const char *err, ...);
 void SetupD3DCompilerProxy();
-void CleanupD3DCompilerProxy();
+bool ComputeExeMD5();
 
 inline mINI::INIFile ini("sekiroimgui.ini");
 inline mINI::INIStructure config;

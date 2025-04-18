@@ -34,6 +34,10 @@ constexpr uintptr_t timescale_player_offset = 0x6c1a57; // credits to 'Zullie th
 // mine (rootBrz) offsets
 constexpr uintptr_t resolution_width_check_offset = 0x11BA038;
 constexpr uintptr_t resolution_height_check_offset = 0x11BA03E;
+constexpr uintptr_t is_game_in_loading_offset = 0x3D7ACB3;
+constexpr uintptr_t fullscreen_refreshrate_num = 0x1B62D3F;
+constexpr uintptr_t fullscreen_refreshrate_den = 0x1B62D46;
 
-inline uintptr_t player_deaths_addr;
-inline uintptr_t total_kills_addr;
+inline int *player_deaths_addr;
+inline int *total_kills_addr;
+inline uintptr_t is_game_in_loading_addr;

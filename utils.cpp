@@ -1,5 +1,5 @@
 #include "utils.h"
-#include "offset.h"
+#include "md5c/md5.h"
 #include "patches.h"
 
 typedef HRESULT(WINAPI *D3DGETBLOBPART)(LPCVOID pSrcData, SIZE_T SrcDataSize, UINT Part, UINT Flags, void **ppPart);
@@ -32,6 +32,7 @@ typedef struct
 constexpr Setting defaultSettings[] = {
     {"EnableFpsUnlock", "1", &FPSUNLOCK_ENABLED},
     {"FpsLimit", "165", &FPS_LIMIT},
+    {"EnableVSync", "1", &VSYNC_ENABLED},
     {"EnableFOV", "0", &FOV_ENABLED},
     {"ValueFOV", "0", &FOV_VALUE},
     {"EnableCustomRes", "0", &CUSTOM_RES_ENABLED},
@@ -48,9 +49,11 @@ constexpr Setting defaultSettings[] = {
     {"PlayerDeathsKillsX", "100", &PLAYER_DEATHSKILLS_X},
     {"PlayerDeathsKillsY", "100", &PLAYER_DEATHSKILLS_Y},
     {"PlayerDeathsKillsFZ", "24", &PLAYER_DEATHSKILLS_FZ},
+    {"DisableCamReset", "0", &DISABLE_CAMRESET_ENABLED},
+    {"DisableCamAutorotate", "0", &DISABLE_CAMERA_AUTOROTATE_ENABLED},
 };
 
-bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *str)
+bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *msg)
 {
   SIZE_T bytesWritten = 0;
   BOOL result = WriteProcessMemory(GetCurrentProcess(), (LPVOID)address, data, size, &bytesWritten);
@@ -59,43 +62,58 @@ bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, cons
   {
     DWORD errCode = GetLastError();
     char buf[128];
-    snprintf(buf, sizeof(buf), "%s\nWriteProcessMemory failed at 0x%p (error %lu)", str, (void *)address, errCode);
+    snprintf(buf, sizeof(buf), "%s\nWriteProcessMemory failed at 0x%p (error %lu)", msg, (void *)address, errCode);
 
-    return ErrorLog(true, buf), false;
+    return LogMessage(LogLevel::Error, true, buf), false;
   }
 
+  LogMessage(LogLevel::Success, false, "%s.", msg);
   return true;
 }
 
-uintptr_t AllocateMemoryNearAddress(uintptr_t target, size_t size)
+uintptr_t AllocateMemoryNearAddress(uintptr_t target, size_t size, bool executable)
 {
+  DWORD flProtect = executable ? PAGE_EXECUTE_READWRITE : PAGE_READWRITE;
+
   SYSTEM_INFO si;
   GetSystemInfo(&si);
 
-  uintptr_t minAddr = (target > 0x70000000)
+  uintptr_t granularity = si.dwAllocationGranularity;
+  uintptr_t minAddr = (target >= 0x70000000)
                           ? target - 0x70000000
-                          : (uintptr_t)si.lpMinimumApplicationAddress;
+                          : reinterpret_cast<uintptr_t>(si.lpMinimumApplicationAddress);
   uintptr_t maxAddr = target + 0x70000000;
+
+  HANDLE process = GetCurrentProcess();
   MEMORY_BASIC_INFORMATION mbi;
 
-  while (minAddr < maxAddr)
+  for (uintptr_t addr = target; addr >= minAddr; addr -= granularity)
   {
-    if (VirtualQueryEx(GetCurrentProcess(), (LPCVOID)minAddr, &mbi,
-                       sizeof(mbi)) != sizeof(mbi))
-      break;
+    if (VirtualQueryEx(process, (LPCVOID)addr, &mbi, sizeof(mbi)) != sizeof(mbi))
+      continue;
 
     if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
     {
-      LPVOID allocated =
-          VirtualAllocEx(GetCurrentProcess(), (LPVOID)minAddr, size,
-                         MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+      LPVOID allocated = VirtualAllocEx(process, (LPVOID)addr, size, MEM_COMMIT | MEM_RESERVE, flProtect);
       if (allocated)
-      {
         return reinterpret_cast<uintptr_t>(allocated);
-      }
     }
-    minAddr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize;
   }
+
+  for (uintptr_t addr = target + granularity; addr < maxAddr; addr += granularity)
+  {
+    if (VirtualQueryEx(process, (LPCVOID)addr, &mbi, sizeof(mbi)) != sizeof(mbi))
+      continue;
+
+    if (mbi.State == MEM_FREE && mbi.RegionSize >= size)
+    {
+      LPVOID allocated = VirtualAllocEx(process, (LPVOID)addr, size, MEM_COMMIT | MEM_RESERVE, flProtect);
+      if (allocated)
+        return reinterpret_cast<uintptr_t>(allocated);
+    }
+  }
+
+  LogMessage(LogLevel::Error, true, "Failed to allocate memory near target address 0x%p", (void *)target);
   return 0;
 }
 
@@ -104,19 +122,26 @@ uintptr_t DereferenceStaticX64Pointer(uintptr_t instructionAddress, int instruct
   return instructionAddress + *(int32_t *)(instructionAddress + (instructionLength - 0x04)) + instructionLength;
 }
 
-bool IsValidReadPtr(uintptr_t ptr, size_t size)
+bool IsValidReadPtr(uintptr_t addr, size_t size)
 {
-  if (!ptr)
+  if (addr == 0 || size == 0)
     return false;
 
-  if (size == 0)
+  if (addr + size < addr)
     return false;
 
-  unsigned char buffer[size];
-  SIZE_T bytesRead = 0;
-  BOOL result = ReadProcessMemory(GetCurrentProcess(), (LPCVOID)ptr, buffer, size, &bytesRead);
+  HANDLE hProcess = GetCurrentProcess();
 
-  if (!result || bytesRead != size)
+  BYTE buffer[1];
+  SIZE_T bytesRead;
+
+  const char *startAddr = reinterpret_cast<const char *>(addr);
+  const char *endAddr = startAddr + size - 1;
+
+  if (!ReadProcessMemory(hProcess, startAddr, buffer, 1, &bytesRead) || bytesRead != 1)
+    return false;
+
+  if (!ReadProcessMemory(hProcess, endAddr, buffer, 1, &bytesRead) || bytesRead != 1)
     return false;
 
   return true;
@@ -134,35 +159,49 @@ uintptr_t GetAbsoluteAddress(uintptr_t offset)
   return absoluteAddress;
 }
 
-bool InitKillsDeathsAddresses()
+std::vector<uint8_t> RelJmpBytes(int length, int32_t relative)
 {
-  // Deaths
-  uintptr_t pDeathOffset = GetAbsoluteAddress(player_deaths_offset + 29);
-  if (!IsValidReadPtr(pDeathOffset, sizeof(uintptr_t)))
-    return false;
-  uintptr_t pDeathOffset2 = DereferenceStaticX64Pointer(pDeathOffset, 7);
-  if (!IsValidReadPtr(pDeathOffset2, sizeof(uintptr_t)))
-    return false;
-  uintptr_t pPlayerDeaths = *(uintptr_t *)pDeathOffset2 + *(int32_t *)(pDeathOffset + 9);
-  if (!IsValidReadPtr(pPlayerDeaths, sizeof(uintptr_t)))
-    return false;
+  std::vector<uint8_t> bytes(length);
+  bytes[0] = 0xE9;
+  memcpy(&bytes[1], &relative, sizeof(int32_t));
+  for (int i = 5; i < length; i++)
+    bytes[i] = 0x90;
+  return bytes;
+}
 
-  // Kills
-  uintptr_t pKillsOffset = GetAbsoluteAddress(total_kills_offset) + 7;
-  if (!IsValidReadPtr(pKillsOffset, sizeof(uintptr_t)))
-    return false;
-  uintptr_t pKillsOffset2 = DereferenceStaticX64Pointer(pKillsOffset, 7);
-  if (!IsValidReadPtr(pKillsOffset2, sizeof(uintptr_t)))
-    return false;
-  uintptr_t pTotalKills = *(uintptr_t *)(*(uintptr_t *)pKillsOffset2 + 0x08) + 0xDC;
-  if (!IsValidReadPtr(pTotalKills, sizeof(uintptr_t)))
-    return false;
+uintptr_t InjectShellcodeWithJumpBack(uintptr_t targetAddr, const uint8_t *shellcode, size_t shellcodeSize, size_t patchSize, const char *msg)
+{
+  uintptr_t codeCave = AllocateMemoryNearAddress(targetAddr, shellcodeSize + 5, true);
+  uintptr_t returnAddr = targetAddr + patchSize;
 
-  // Final Addresses
-  player_deaths_addr = pPlayerDeaths;
-  total_kills_addr = pTotalKills;
+  int32_t relJumpBack = (int32_t)(returnAddr - (codeCave + shellcodeSize + 5));
 
-  return true;
+  std::vector<uint8_t> detour(shellcodeSize + 5);
+  memcpy(detour.data(), shellcode, shellcodeSize);
+  detour[shellcodeSize] = 0xE9;
+  memcpy(detour.data() + shellcodeSize + 1, &relJumpBack, sizeof(relJumpBack));
+
+  WriteProtectedMemory(codeCave, detour.data(), detour.size(), msg);
+  return codeCave;
+}
+
+bool ComputeExeMD5()
+{
+  static const char *expectedHash = "0E0A8407C78E896A73D8F27DA3D4C0CC";
+  char path[MAX_PATH], actualHash[33] = {0};
+  uint8_t binaryHash[16];
+  FILE *file;
+
+  if (!GetModuleFileNameA(0, path, MAX_PATH) || fopen_s(&file, path, "rb") || !file)
+    return LogMessage(LogLevel::Error, true, "MD5 check failed"), false;
+
+  md5File(file, binaryHash);
+  fclose(file);
+
+  for (int i = 0; i < 16; i++)
+    sprintf_s(actualHash + i * 2, 3, "%02X", binaryHash[i]);
+
+  return !strcmp(actualHash, expectedHash) || (LogMessage(LogLevel::Error, true, "Hash mismatch\nCurrent: %s\nExpected: %s", actualHash, expectedHash), false);
 }
 
 HWND GetCurrentProcessWindow()
@@ -216,26 +255,42 @@ void RefreshIniValues()
   config.remove("settings");
 }
 
-void ErrorLog(bool showMessage, const char *err, ...)
+void LogMessage(LogLevel level, bool showMessage, const char *err, ...)
 {
+  const char *levelStr = nullptr;
+  switch (level)
+  {
+  case LogLevel::Info:
+    levelStr = "[INFO]";
+    break;
+  case LogLevel::Error:
+    levelStr = "[ERRO]";
+    break;
+  case LogLevel::Success:
+    levelStr = "[SUCC]";
+    break;
+  }
+
   va_list ArgList;
-  char buffer[1024];
+  char message[1024];
   va_start(ArgList, err);
-  vsnprintf(buffer, sizeof(buffer), err, ArgList);
+  vsnprintf(message, sizeof(message), err, ArgList);
   va_end(ArgList);
 
-  FILE *logFile = fopen("sekirofpsimgui_log.txt", "a");
+  FILE *logFile;
+  fopen_s(&logFile, "sekirofpsimgui.log", "a");
   if (logFile)
   {
     time_t now = time(NULL);
-    tm *timeinfo = localtime(&now);
+    tm timeinfo;
+    localtime_s(&timeinfo, &now);
     char timestamp[64];
-    strftime(timestamp, sizeof(timestamp), "[%Y-%m-%d %H:%M:%S] ", timeinfo);
+    strftime(timestamp, sizeof(timestamp), "[%Y-%m-%d %H:%M:%S]", &timeinfo);
 
-    fprintf(logFile, "%s%s\n", timestamp, buffer);
+    fprintf(logFile, "%s %s %s\n", timestamp, levelStr, message);
     fclose(logFile);
   }
 
   if (showMessage)
-    MessageBoxA(nullptr, buffer, "Sekiro FPS Unlock ImGui", MB_OK | MB_ICONERROR);
+    MessageBoxA(nullptr, message, "Sekiro FPS Unlock ImGui", MB_OK | MB_ICONERROR);
 }

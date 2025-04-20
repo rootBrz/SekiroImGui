@@ -19,6 +19,7 @@ typedef long(WINAPI *changeDisplaySettingsExW)(LPCWSTR lpszDeviceName, DEVMODEW 
 typedef long(CALLBACK *present)(IDXGISwapChain *pSwapChain, UINT syncInterval, UINT flags);
 typedef long(CALLBACK *resizeBuffers)(IDXGISwapChain *pSwapChain, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat, UINT SwapChainFlags);
 
+inline HWND GAME_WINDOW = NULL;
 inline bool SHOW_IMGUI = false;
 inline WNDPROC oWndProc;
 inline ID3D11Device *pDevice = nullptr;

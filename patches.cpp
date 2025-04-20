@@ -1,4 +1,5 @@
 #include "patches.h"
+#include "gui.h"
 #include "offset.h"
 #include "utils.h"
 
@@ -90,14 +91,12 @@ void ApplyBorderlessPatch()
   if (FULLSCREEN_STATE || (!INITIALIZED && !BORDERLESS_ENABLED))
     return;
 
-  HWND hwnd = GetCurrentProcessWindow();
-
   if (BORDERLESS_ENABLED)
   {
-    SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    SetWindowLongPtr(GAME_WINDOW, GWL_STYLE, WS_POPUP | WS_VISIBLE);
     int screenWidth = GetSystemMetrics(SM_CXSCREEN);
     int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-    SetWindowPos(hwnd, HWND_TOP, 0, 0, screenWidth, screenHeight, SWP_NOREDRAW);
+    SetWindowPos(GAME_WINDOW, HWND_TOP, 0, 0, screenWidth, screenHeight, SWP_NOREDRAW);
   }
   else if (INITIALIZED)
   {
@@ -107,12 +106,12 @@ void ApplyBorderlessPatch()
     int width = *(int32_t *)curResValue;
     int height = *(int32_t *)(curResValue + 4);
 
-    SetWindowLongPtr(hwnd, GWL_STYLE, WS_VISIBLE | WS_CAPTION | WS_BORDER | WS_CLIPSIBLINGS | WS_DLGFRAME | WS_SYSMENU | WS_GROUP | WS_MINIMIZEBOX);
+    SetWindowLongPtr(GAME_WINDOW, GWL_STYLE, WS_VISIBLE | WS_CAPTION | WS_BORDER | WS_CLIPSIBLINGS | WS_DLGFRAME | WS_SYSMENU | WS_GROUP | WS_MINIMIZEBOX);
     RECT wr = {0, 0, (LONG)width, (LONG)height};
-    DWORD style = GetWindowLong(hwnd, GWL_STYLE);
-    DWORD exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+    DWORD style = GetWindowLong(GAME_WINDOW, GWL_STYLE);
+    DWORD exStyle = GetWindowLong(GAME_WINDOW, GWL_EXSTYLE);
     AdjustWindowRectEx(&wr, style, false, exStyle);
-    SetWindowPos(hwnd, HWND_TOP, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
+    SetWindowPos(GAME_WINDOW, HWND_TOP, 0, 0, wr.right - wr.left, wr.bottom - wr.top,
                  SWP_NOREDRAW);
   }
 }
@@ -254,50 +253,63 @@ void ApplyFullscreenHZPatch()
   WriteProtectedMemory(numAddr, RelJmpBytes(14, (int32_t)(detour - (numAddr + 5))).data(), 14, "Patch fullscreen hz fix");
 }
 
-// Addresses for camera adjustments
+// Dragonrot
+void ApplyDragonrotPatch()
+{
+  if (!INITIALIZED && !DISABLE_DRAGONROT_ENABLED)
+    return;
+
+  uintptr_t dragonrotAddr = GetAbsoluteAddress(dragonrot_effect_offset) + 13;
+
+  uint8_t dragonrotDisable[] = {0x90, 0x90, 0x90, 0xE9};
+  uint8_t dragonrotEnable[] = {0x84, 0xC0, 0x0F, 0x85};
+
+  WriteProtectedMemory(dragonrotAddr, DISABLE_DRAGONROT_ENABLED ? dragonrotDisable : dragonrotEnable, sizeof(dragonrotDisable), "Patch dragonrot");
+}
+
+// Death penalties
+uintptr_t deathPenalties1Addr;
+uintptr_t deathPenalties2Addr;
+uint8_t deathPenalties1OrigBytes[5];
+uint8_t deathPenalties2OrigBytes[32];
+void ApplyDeathPenaltiesPatch()
+{
+  if (!INITIALIZED)
+  {
+    deathPenalties1Addr = GetAbsoluteAddress(deathpenalties1_offset) + 11;
+    deathPenalties2Addr = GetAbsoluteAddress(deathpenalties2_offset);
+
+    ReadProcessMemory(GetCurrentProcess(), (LPVOID)deathPenalties1Addr, deathPenalties1OrigBytes, sizeof(deathPenalties1OrigBytes), nullptr);
+    ReadProcessMemory(GetCurrentProcess(), (LPVOID)deathPenalties2Addr, deathPenalties2OrigBytes, sizeof(deathPenalties2OrigBytes), nullptr);
+  }
+
+  if (!INITIALIZED && !DISABLE_DEATH_PENALTIES_ENABLED)
+    return;
+
+  constexpr uint8_t disablePenalties1[] = {0x90, 0x90, 0x90, 0x90, 0x90};
+  constexpr uint8_t disablePenalties2[] = {
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+
+  WriteProtectedMemory(deathPenalties1Addr, DISABLE_DEATH_PENALTIES_ENABLED ? disablePenalties1 : deathPenalties1OrigBytes, sizeof(disablePenalties1), "Patch death penalties 1");
+  WriteProtectedMemory(deathPenalties2Addr, DISABLE_DEATH_PENALTIES_ENABLED ? disablePenalties2 : deathPenalties2OrigBytes, sizeof(disablePenalties2), "Patch death penalties 2");
+}
+
+// Autorotate
 uintptr_t camAdjustPitchAddr;
 uintptr_t camAdjustPitchXYAddr;
 uintptr_t camAdjustYawZAddr;
 uintptr_t camAdjustYawXYAddr;
-
-// Original bytes (before patching)
-uint8_t camAdjustPitchOrigBytes[7];
-uint8_t camAdjustPitchXYOrigBytes[12];
-uint8_t camAdjustYawZAddrOrigBytes[8];
-uint8_t camAdjustYawXYAddrOrigBytes[8];
-
-// Addresses of injected shellcode
 uintptr_t camAdjustPitchCode;
 uintptr_t camAdjustPitchXYCode;
 uintptr_t camAdjustYawZCode;
 uintptr_t camAdjustYawXYCode;
-
-// Camera Pitch (Z-axis)
-constexpr uint8_t INJECT_CAMADJUST_PITCH_SHELLCODE[] = {
-    0x0F, 0x28, 0xA6, 0x70, 0x01, 0x00, 0x00, // movaps xmm4, [rsi+0x170]
-    0x0F, 0x29, 0xA5, 0x70, 0x08, 0x00, 0x00  // movaps [rbp+0x870], xmm4
-};
-
-// Camera Yaw (Z-axis)
-constexpr uint8_t INJECT_CAMADJUST_YAW_Z_SHELLCODE[] = {
-    0xF3, 0x0F, 0x10, 0x86, 0x74, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x174]
-    0xF3, 0x0F, 0x11, 0x86, 0x74, 0x01, 0x00, 0x00  // movss [rsi+0x174], xmm0
-};
-
-// Camera Pitch (XY-axis)
-constexpr uint8_t INJECT_CAMADJUST_PITCH_XY_SHELLCODE[] = {
-    0xF3, 0x0F, 0x10, 0x86, 0x70, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x170]
-    0xF3, 0x0F, 0x11, 0x00,                         // movss [rax], xmm0
-    0xF3, 0x0F, 0x10, 0x00,                         // movss xmm0, [rax]
-    0xF3, 0x0F, 0x11, 0x86, 0x70, 0x01, 0x00, 0x00  // movss [rsi+0x170], xmm0
-};
-
-// Camera Yaw (XY-axis)
-constexpr uint8_t INJECT_CAMADJUST_YAW_XY_SHELLCODE[] = {
-    0xF3, 0x0F, 0x10, 0x86, 0x74, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x174]
-    0xF3, 0x0F, 0x11, 0x86, 0x74, 0x01, 0x00, 0x00  // movss [rsi+0x174], xmm0
-};
-
+uint8_t camAdjustPitchOrigBytes[7];
+uint8_t camAdjustPitchXYOrigBytes[12];
+uint8_t camAdjustYawZAddrOrigBytes[8];
+uint8_t camAdjustYawXYAddrOrigBytes[8];
 void ApplyCamAutorotatePatch()
 {
   if (!INITIALIZED)
@@ -311,6 +323,32 @@ void ApplyCamAutorotatePatch()
     ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustPitchXYAddr, camAdjustPitchXYOrigBytes, sizeof(camAdjustPitchXYOrigBytes), nullptr);
     ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustYawZAddr, camAdjustYawZAddrOrigBytes, sizeof(camAdjustYawZAddrOrigBytes), nullptr);
     ReadProcessMemory(GetCurrentProcess(), (LPVOID)camAdjustYawXYAddr, camAdjustYawXYAddrOrigBytes, sizeof(camAdjustYawXYAddrOrigBytes), nullptr);
+
+    // Camera Pitch (Z-axis)
+    constexpr uint8_t INJECT_CAMADJUST_PITCH_SHELLCODE[] = {
+        0x0F, 0x28, 0xA6, 0x70, 0x01, 0x00, 0x00, // movaps xmm4, [rsi+0x170]
+        0x0F, 0x29, 0xA5, 0x70, 0x08, 0x00, 0x00  // movaps [rbp+0x870], xmm4
+    };
+
+    // Camera Yaw (Z-axis)
+    constexpr uint8_t INJECT_CAMADJUST_YAW_Z_SHELLCODE[] = {
+        0xF3, 0x0F, 0x10, 0x86, 0x74, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x174]
+        0xF3, 0x0F, 0x11, 0x86, 0x74, 0x01, 0x00, 0x00  // movss [rsi+0x174], xmm0
+    };
+
+    // Camera Pitch (XY-axis)
+    constexpr uint8_t INJECT_CAMADJUST_PITCH_XY_SHELLCODE[] = {
+        0xF3, 0x0F, 0x10, 0x86, 0x70, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x170]
+        0xF3, 0x0F, 0x11, 0x00,                         // movss [rax], xmm0
+        0xF3, 0x0F, 0x10, 0x00,                         // movss xmm0, [rax]
+        0xF3, 0x0F, 0x11, 0x86, 0x70, 0x01, 0x00, 0x00  // movss [rsi+0x170], xmm0
+    };
+
+    // Camera Yaw (XY-axis)
+    constexpr uint8_t INJECT_CAMADJUST_YAW_XY_SHELLCODE[] = {
+        0xF3, 0x0F, 0x10, 0x86, 0x74, 0x01, 0x00, 0x00, // movss xmm0, [rsi+0x174]
+        0xF3, 0x0F, 0x11, 0x86, 0x74, 0x01, 0x00, 0x00  // movss [rsi+0x174], xmm0
+    };
 
     camAdjustPitchCode = InjectShellcodeWithJumpBack(camAdjustPitchAddr, INJECT_CAMADJUST_PITCH_SHELLCODE, sizeof(INJECT_CAMADJUST_PITCH_SHELLCODE), sizeof(camAdjustPitchOrigBytes), "Write cam adjust pitch code to allocated memory");
     camAdjustPitchXYCode = InjectShellcodeWithJumpBack(camAdjustPitchXYAddr, INJECT_CAMADJUST_PITCH_XY_SHELLCODE, sizeof(INJECT_CAMADJUST_PITCH_XY_SHELLCODE), sizeof(camAdjustPitchXYOrigBytes), "Write cam adjust pitch XY code to allocated memory");

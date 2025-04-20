@@ -63,7 +63,7 @@ void Shutdown()
     pDevice = NULL;
   }
 
-  SetWindowLongPtr(GetCurrentProcessWindow(), GWLP_WNDPROC, (LONG_PTR)(oWndProc));
+  SetWindowLongPtr(GAME_WINDOW, GWLP_WNDPROC, (LONG_PTR)(oWndProc));
 
   LogMessage(LogLevel::Info, false, "Shutdown initiated.");
   Sleep(100);
@@ -86,7 +86,7 @@ DWORD WINAPI InitThread(LPVOID lpParam)
   RefreshIniValues();
   ApplyResPatch();
 
-  while (!GetCurrentProcessWindow())
+  while (!(GAME_WINDOW = GetGameWindow()))
     Sleep(10);
 
   InitUser32Hooks();
@@ -97,11 +97,11 @@ DWORD WINAPI InitThread(LPVOID lpParam)
   ApplyIntroPatch();
   ApplyCamResetPatch();
   ApplyCamAutorotatePatch();
+  ApplyDeathPenaltiesPatch();
+  ApplyDragonrotPatch();
   ApplyAutolootPatch();
   ApplyFramelockPatch();
   ApplyFovPatch();
-  while (!ApplyTimescalePatch())
-    Sleep(10);
   INITIALIZED = true;
 
   GetSwapChainPointers();
@@ -109,13 +109,7 @@ DWORD WINAPI InitThread(LPVOID lpParam)
 
   while (true)
   {
-    HWND hWnd = GetCurrentProcessWindow();
-    if (!IsWindow(hWnd))
-      break;
-
-    DWORD exitCode = 0;
-    GetExitCodeProcess(GetCurrentProcess(), &exitCode);
-    if (exitCode != STILL_ACTIVE)
+    if (!IsWindow(GAME_WINDOW))
       break;
 
     Sleep(500);

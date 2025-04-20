@@ -51,7 +51,9 @@ constexpr Setting defaultSettings[] = {
     {"PlayerDeathsKillsFZ", "24", &PLAYER_DEATHSKILLS_FZ},
     {"DisableCamReset", "0", &DISABLE_CAMRESET_ENABLED},
     {"DisableCamAutorotate", "0", &DISABLE_CAMERA_AUTOROTATE_ENABLED},
-};
+    {"DisableDeathPenalties", "0", &DISABLE_DEATH_PENALTIES_ENABLED},
+    {"DisableDragonrot", "0", &DISABLE_DRAGONROT_ENABLED},
+    {"UIOpenKey", "36", &UI_OPEN_KEY}};
 
 bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *msg)
 {
@@ -204,29 +206,27 @@ bool ComputeExeMD5()
   return !strcmp(actualHash, expectedHash) || (LogMessage(LogLevel::Error, true, "Hash mismatch\nCurrent: %s\nExpected: %s", actualHash, expectedHash), false);
 }
 
-HWND GetCurrentProcessWindow()
+HWND GetGameWindow()
 {
-  HWND currentHwnd = NULL;
-  DWORD currentPID = GetCurrentProcessId();
+  HWND result = NULL;
 
-  EnumWindows(
-      [](HWND hwnd, LPARAM lParam) -> BOOL
-      {
-        DWORD pid;
-        HWND *resultPtr = (HWND *)lParam;
+  EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL
+              {
+    DWORD pid;
+    GetWindowThreadProcessId(hwnd, &pid);
+    
+    if (pid != GetCurrentProcessId() || !IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER))
+      return TRUE;
+      
+    char className[256];
+    GetClassNameA(hwnd, className, sizeof(className));
+    if (strcmp(className, "CSclass") == 0) {
+      *(HWND*)lParam = hwnd;
+      return FALSE;  
+    }
+    return TRUE; }, (LPARAM)&result);
 
-        GetWindowThreadProcessId(hwnd, &pid);
-        if (pid == GetCurrentProcessId() && !GetWindow(hwnd, GW_OWNER) &&
-            IsWindowVisible(hwnd))
-        {
-          *resultPtr = hwnd;
-          return FALSE;
-        }
-        return TRUE;
-      },
-      (LPARAM)&currentHwnd);
-
-  return currentHwnd;
+  return result;
 }
 
 void RefreshIniValues()

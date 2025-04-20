@@ -10,6 +10,7 @@ HWND window = nullptr;
 static bool init = false;
 static ImFont *statsRoboto;
 static uint8_t lastLoadingStatus = 0x00;
+static bool initPatches = false;
 
 extern LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg,
                                               WPARAM wParam, LPARAM lParam);
@@ -138,6 +139,18 @@ void CreateImGuiLayout()
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("This will completely disable the automatic camera rotation adjustments when you are moving. This is intended for mouse users.");
 
+  // --- Death Penalties ---
+  if (ImGui::Checkbox("Disable Death Penalties (except dragonrot)", reinterpret_cast<bool *>(&DISABLE_DEATH_PENALTIES_ENABLED)))
+    updateSetting("DisableDeathPenalties", DISABLE_DEATH_PENALTIES_ENABLED, ApplyDeathPenaltiesPatch);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Like 'Unseen Aid' you will not lose any Sen or Experience upon death with this option enabled. Dragonrot will not be modified.");
+
+  // --- Dragonrot ---
+  if (ImGui::Checkbox("Disable Dragonrot", reinterpret_cast<bool *>(&DISABLE_DRAGONROT_ENABLED)))
+    updateSetting("DisableDragonrot", DISABLE_DRAGONROT_ENABLED, ApplyDragonrotPatch);
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("This option will remove the effect dragonrot has on NPCs, if an NPC already got dragonrot then it will ensure that their condition won't worsen when you die.\nThe internal dragonrot counter will however keep increasing, nobody will be affected by it though.\nKeep in mind that there are certain thresholds regarding amount of deaths between dragonrot levels.\nIf you enable this feature and die a level might get skipped so even when you disable it afterwards the dragonrot level for all NPCs will only increase after you have hit the next threshold.");
+
   // --- Field of View (FOV) ---
   if (ImGui::Checkbox("FOV", reinterpret_cast<bool *>(&FOV_ENABLED)))
     updateSetting("EnableFOV", FOV_ENABLED, ApplyFovPatch);
@@ -226,7 +239,7 @@ void CreateImGuiLayout()
     updateSetting("PlayerDeathsKillsFZ", PLAYER_DEATHSKILLS_FZ);
 
   // --- Display Totals ---
-  if (player_deaths_addr != nullptr || total_kills_addr != nullptr)
+  if (player_deaths_addr != nullptr && total_kills_addr != nullptr)
     ImGui::Text("Deaths: %d\nKills: %d", *player_deaths_addr, (*total_kills_addr - *player_deaths_addr));
 
   ImGui::End();
@@ -270,9 +283,6 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
 
   pSwapChain->GetFullscreenState((BOOL *)&FULLSCREEN_STATE, nullptr);
 
-  if (player_deaths_addr == nullptr || total_kills_addr == nullptr)
-    InitKillsDeathsAddresses();
-
   // Do some things in/after loading screen
   GAME_LOADING = *reinterpret_cast<uint8_t *>(is_game_in_loading_addr);
   if (lastLoadingStatus != GAME_LOADING)
@@ -280,7 +290,15 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
     lastLoadingStatus = GAME_LOADING;
     ApplyFramelockPatch();
     if (!lastLoadingStatus)
+    {
       ApplyPlayerTimescalePatch();
+      if (!initPatches)
+      {
+        InitKillsDeathsAddresses();
+        ApplyTimescalePatch();
+        initPatches = true;
+      }
+    }
   }
 
   ImGui_ImplDX11_NewFrame();
@@ -292,12 +310,12 @@ long CALLBACK DetourPresent(IDXGISwapChain *pSwapChain, UINT syncInterval,
   io.MouseDrawCursor = false;
   ImGui::SetNextWindowPos(
       ImVec2((io.DisplaySize.x * 0.35f), io.DisplaySize.y * 0.5f),
-      ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+      ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
 
   if (SHOW_IMGUI)
     CreateImGuiLayout();
 
-  if (SHOW_PLAYER_DEATHSKILLS_ENABLED && (player_deaths_addr != nullptr || total_kills_addr != nullptr))
+  if (SHOW_PLAYER_DEATHSKILLS_ENABLED && (player_deaths_addr != nullptr && total_kills_addr != nullptr))
   {
     ImDrawList *draw_list = ImGui::GetForegroundDrawList();
     char textBuffer[128];
@@ -323,36 +341,12 @@ BOOL WINAPI DetourSetCursorPos(int X, int Y)
   return fnSetCursorPos(X, Y);
 }
 
-// Detour ChangeDisplaySettingsExW to change of display settings to 60hz refresh rate
+// Detour ChangeDisplaySettingsExW remove 60hz refresh rate lock
 long WINAPI DetourChangeDisplaySettingsExW(LPCWSTR lpszDeviceName, DEVMODEW *lpDevMode, HWND hwnd, DWORD dwflags, LPVOID lParam)
 {
   if (lpDevMode != nullptr)
   {
-    u_int maxRefreshRate = 0;
-    DEVMODEW devMode = {};
-    devMode.dmSize = sizeof(DEVMODEW);
-
-    for (DWORD i = 0; EnumDisplaySettingsW(lpszDeviceName, i, &devMode); i++)
-    {
-      if (devMode.dmPelsWidth == lpDevMode->dmPelsWidth &&
-          devMode.dmPelsHeight == lpDevMode->dmPelsHeight &&
-          devMode.dmBitsPerPel == lpDevMode->dmBitsPerPel)
-      {
-        if (devMode.dmDisplayFrequency > maxRefreshRate)
-        {
-          maxRefreshRate = devMode.dmDisplayFrequency;
-        }
-      }
-    }
-
-    if (maxRefreshRate > 0)
-    {
-      lpDevMode->dmDisplayFrequency = maxRefreshRate;
-    }
-
-    LogMessage(LogLevel::Info, false, "Max Refresh Rate for %dx%d @ %dbpp: %d Hz",
-               lpDevMode->dmPelsWidth, lpDevMode->dmPelsHeight,
-               lpDevMode->dmBitsPerPel, lpDevMode->dmDisplayFrequency);
+    lpDevMode->dmFields &= ~DM_DISPLAYFREQUENCY;
   }
 
   return fnChangeDisplaySettingsExW(lpszDeviceName, lpDevMode, hwnd, dwflags, lParam);
@@ -376,7 +370,7 @@ UINT WINAPI DetourGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand,
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-  if (uMsg == WM_KEYDOWN && wParam == VK_HOME)
+  if (uMsg == WM_KEYDOWN && wParam == UI_OPEN_KEY)
   {
     SHOW_IMGUI = !SHOW_IMGUI;
     ImGuiIO &io = ImGui::GetIO();

@@ -11,7 +11,7 @@ enum class LogLevel
   Success
 };
 
-HWND GetCurrentProcessWindow();
+HWND GetGameWindow();
 bool IsValidReadPtr(uintptr_t addr, size_t size);
 bool WriteProtectedMemory(uintptr_t address, const void *data, size_t size, const char *msg);
 uintptr_t GetAbsoluteAddress(uintptr_t offset);
@@ -42,3 +42,30 @@ void SetIniValue(const char *str, T value)
   config["Settings"][str] = std::to_string(value);
   ini.write(config);
 }
+
+// INI SETTINGS
+inline bool FULLSCREEN_STATE;
+inline int FPS_LIMIT;
+inline int FOV_VALUE;
+inline int CUSTOM_RES_ENABLED;
+inline int CUSTOM_RES_WIDTH;
+inline int CUSTOM_RES_HEIGHT;
+inline int FPSUNLOCK_ENABLED;
+inline int AUTOLOOT_ENABLED;
+inline int INTROSKIP_ENABLED;
+inline int BORDERLESS_ENABLED;
+inline int FOV_ENABLED;
+inline int SHOW_PLAYER_DEATHSKILLS_ENABLED;
+inline int PLAYER_DEATHSKILLS_X;
+inline int PLAYER_DEATHSKILLS_Y;
+inline int PLAYER_DEATHSKILLS_FZ;
+inline int TIMESCALE_ENABLED;
+inline int PLAYER_TIMESCALE_ENABLED;
+inline float TIMESCALE_VALUE;
+inline float PLAYER_TIMESCALE_VALUE;
+inline int DISABLE_CAMRESET_ENABLED;
+inline int DISABLE_CAMERA_AUTOROTATE_ENABLED;
+inline int VSYNC_ENABLED;
+inline int DISABLE_DEATH_PENALTIES_ENABLED;
+inline int DISABLE_DRAGONROT_ENABLED;
+inline int UI_OPEN_KEY;

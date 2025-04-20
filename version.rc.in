@@ -14,7 +14,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "rootBrz"
-            VALUE "FileDescription",  "FPS Unlocker as a DLL with menu"
+            VALUE "FileDescription",  "FPS Unlocker DLL with ImGui menu"
             VALUE "FileVersion",      "@VERSION_STRING@"
             VALUE "OriginalFilename", "d3dcompiler_43.dll"
             VALUE "ProductName",      "Sekiro FPS Unlock ImGui"
